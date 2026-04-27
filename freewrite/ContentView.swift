@@ -24,48 +24,64 @@ struct HumanEntry: Identifiable {
     var entryType: EntryType
     var videoFilename: String?
 
-    static func createNew() -> HumanEntry {
-        let id = UUID()
+    static func createNew(in directory: URL) -> HumanEntry {
         let now = Date()
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd-HH-mm-ss"
-        let dateString = dateFormatter.string(from: now)
+        let isoFormatter = DateFormatter()
+        isoFormatter.locale = Locale(identifier: "en_US_POSIX")
+        isoFormatter.dateFormat = "yyyy-MM-dd"
+        let dateString = isoFormatter.string(from: now)
 
-        // For display
-        dateFormatter.dateFormat = "MMM d"
-        let displayDate = dateFormatter.string(from: now)
+        let displayFormatter = DateFormatter()
+        displayFormatter.dateFormat = "MMM d"
+        let displayDate = displayFormatter.string(from: now)
+
+        let baseFilename = "\(dateString) \u{2014} freewrite"
+        let filename = HumanEntry.uniqueFilename(base: baseFilename, in: directory)
 
         return HumanEntry(
-            id: id,
+            id: UUID(),
             date: displayDate,
-            filename: "[\(id)]-[\(dateString)].md",
+            filename: filename,
             previewText: "",
             entryType: .text,
             videoFilename: nil
         )
     }
 
-    static func createVideoEntry() -> HumanEntry {
-        let id = UUID()
+    static func createVideoEntry(in directory: URL) -> HumanEntry {
         let now = Date()
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd-HH-mm-ss"
-        let dateString = dateFormatter.string(from: now)
+        let isoFormatter = DateFormatter()
+        isoFormatter.locale = Locale(identifier: "en_US_POSIX")
+        isoFormatter.dateFormat = "yyyy-MM-dd"
+        let dateString = isoFormatter.string(from: now)
 
-        // For display
-        dateFormatter.dateFormat = "MMM d"
-        let displayDate = dateFormatter.string(from: now)
+        let displayFormatter = DateFormatter()
+        displayFormatter.dateFormat = "MMM d"
+        let displayDate = displayFormatter.string(from: now)
 
-        let videoFilename = "[\(id)]-[\(dateString)].mov"
+        let baseFilename = "\(dateString) \u{2014} freewrite video"
+        let filename = HumanEntry.uniqueFilename(base: baseFilename, in: directory)
+        let videoFilename = filename.replacingOccurrences(of: ".md", with: ".mov")
 
         return HumanEntry(
-            id: id,
+            id: UUID(),
             date: displayDate,
-            filename: "[\(id)]-[\(dateString)].md",
+            filename: filename,
             previewText: "Video Entry",
             entryType: .video,
             videoFilename: videoFilename
         )
+    }
+
+    private static func uniqueFilename(base: String, in directory: URL) -> String {
+        let fm = FileManager.default
+        var candidate = "\(base).md"
+        var counter = 2
+        while fm.fileExists(atPath: directory.appendingPathComponent(candidate).path) {
+            candidate = "\(base) \(counter).md"
+            counter += 1
+        }
+        return candidate
     }
 }
 
@@ -132,6 +148,8 @@ struct ContentView: View {
     @State private var isHoveringFolderButton = false
     @State private var showingTimerMenu = false
     @AppStorage("customDirectoryPath") private var customDirectoryPath: String = ""
+    @AppStorage("customDirectoryBookmark") private var customDirectoryBookmark: Data = Data()
+    @State private var resolvedCustomDirectoryURL: URL? = nil
     @State private var showingVideoRecording = false // Add state for video recording view
     @State private var isHoveringVideoButton = false // Add state for video button hover
     @State private var currentVideoURL: URL? = nil // Add state for current video being viewed
@@ -153,10 +171,12 @@ struct ContentView: View {
     private let fileManager = FileManager.default
     private let saveTimer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
     
-    // Documents directory with custom path support
+    // Documents directory with custom path support.
+    // For sandboxed builds, custom locations require a security-scoped bookmark
+    // (resolvedCustomDirectoryURL) — the bare path string from @AppStorage is
+    // not enough on its own.
     private var documentsDirectory: URL {
-        if !customDirectoryPath.isEmpty {
-            let url = URL(fileURLWithPath: customDirectoryPath)
+        if let url = resolvedCustomDirectoryURL {
             if !fileManager.fileExists(atPath: url.path) {
                 try? fileManager.createDirectory(at: url, withIntermediateDirectories: true)
             }
@@ -177,22 +197,20 @@ struct ContentView: View {
         return directory
     }
 
-    private let videosDirectory: URL = {
-        let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Freewrite")
-            .appendingPathComponent("Videos")
+    private var videosDirectory: URL {
+        let directory = documentsDirectory.appendingPathComponent("Videos")
 
-        if !FileManager.default.fileExists(atPath: directory.path) {
+        if !fileManager.fileExists(atPath: directory.path) {
             do {
-                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                print("Successfully created Freewrite/Videos directory")
+                try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+                print("Successfully created Videos directory at \(directory.path)")
             } catch {
                 print("Error creating videos directory: \(error)")
             }
         }
 
         return directory
-    }()
+    }
 
     private let thumbnailMemoryCache: NSCache<NSString, NSImage> = {
         let cache = NSCache<NSString, NSImage>()
@@ -469,29 +487,90 @@ struct ContentView: View {
     }
     
     private func parseCanonicalEntryFilename(_ filename: String) -> (uuid: UUID, timestamp: Date)? {
+        // Preferred format: "yyyy-MM-dd \u{2014} freewrite[ video][ N].md"
+        if let parsed = parseDashedFreewriteFilename(filename) {
+            return parsed
+        }
+        // Legacy bracketed: "[UUID]-[yyyy-MM-dd-HH-mm-ss].md"
+        if let parsed = parseBracketedUUIDFilename(filename) {
+            return parsed
+        }
+        // Older human-readable: "MMM, d, yyyy - freewrite[ N].md"
+        if let parsed = parseCommaDateFilename(filename) {
+            return parsed
+        }
+        return nil
+    }
+
+    private func parseDashedFreewriteFilename(_ filename: String) -> (uuid: UUID, timestamp: Date)? {
+        let pattern = "^(\\d{4}-\\d{2}-\\d{2}) \u{2014} freewrite( video)?(?: (\\d+))?\\.md$"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let range = NSRange(filename.startIndex..<filename.endIndex, in: filename)
+        guard let match = regex.firstMatch(in: filename, options: [], range: range),
+              let dateRange = Range(match.range(at: 1), in: filename) else {
+            return nil
+        }
+        let dateString = String(filename[dateRange])
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        guard let date = formatter.date(from: dateString) else { return nil }
+
+        var counter = 1
+        if match.numberOfRanges >= 4,
+           let counterRange = Range(match.range(at: 3), in: filename),
+           let n = Int(filename[counterRange]) {
+            counter = n
+        }
+        // Encode counter into seconds-of-day so same-day entries sort newest-first.
+        let timestamp = date.addingTimeInterval(TimeInterval(counter - 1))
+        return (uuid: UUID(), timestamp: timestamp)
+    }
+
+    private func parseBracketedUUIDFilename(_ filename: String) -> (uuid: UUID, timestamp: Date)? {
         guard filename.hasPrefix("["),
               filename.hasSuffix("].md"),
               let divider = filename.range(of: "]-[") else {
             return nil
         }
-
         let uuidStart = filename.index(after: filename.startIndex)
         let uuidString = String(filename[uuidStart..<divider.lowerBound])
-        guard let uuid = UUID(uuidString: uuidString) else {
-            return nil
-        }
+        guard let uuid = UUID(uuidString: uuidString) else { return nil }
 
         let timestampStart = divider.upperBound
-        let timestampEnd = filename.index(filename.endIndex, offsetBy: -4) // before ".md"
+        let timestampEnd = filename.index(filename.endIndex, offsetBy: -4)
         let timestampString = String(filename[timestampStart..<timestampEnd])
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd-HH-mm-ss"
-        guard let timestamp = formatter.date(from: timestampString) else {
+        guard let timestamp = formatter.date(from: timestampString) else { return nil }
+        return (uuid: uuid, timestamp: timestamp)
+    }
+
+    private func parseCommaDateFilename(_ filename: String) -> (uuid: UUID, timestamp: Date)? {
+        let pattern = "^([A-Za-z]+), (\\d{1,2}), (\\d{4}) - freewrite(?: (\\d+))?\\.md$"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let range = NSRange(filename.startIndex..<filename.endIndex, in: filename)
+        guard let match = regex.firstMatch(in: filename, options: [], range: range),
+              let monthRange = Range(match.range(at: 1), in: filename),
+              let dayRange = Range(match.range(at: 2), in: filename),
+              let yearRange = Range(match.range(at: 3), in: filename) else {
             return nil
         }
+        let dateText = "\(filename[monthRange]) \(filename[dayRange]) \(filename[yearRange])"
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "MMM d yyyy"
+        guard let date = formatter.date(from: dateText) else { return nil }
 
-        return (uuid: uuid, timestamp: timestamp)
+        var counter = 1
+        if match.numberOfRanges >= 5,
+           let counterRange = Range(match.range(at: 4), in: filename),
+           let n = Int(filename[counterRange]) {
+            counter = n
+        }
+        let timestamp = date.addingTimeInterval(TimeInterval(counter - 1))
+        return (uuid: UUID(), timestamp: timestamp)
     }
     
     private func isEntryNewer(_ lhs: HumanEntry, than rhs: HumanEntry) -> Bool {
@@ -608,13 +687,92 @@ struct ContentView: View {
 
         panel.begin { response in
             if response == .OK, let url = panel.urls.first {
-                customDirectoryPath = url.path
-                loadExistingEntries()
+                self.applySelectedCustomDirectory(url)
             }
         }
     }
 
+    private func applySelectedCustomDirectory(_ url: URL) {
+        // Release the previous folder's sandbox extension before swapping.
+        if let prev = resolvedCustomDirectoryURL {
+            prev.stopAccessingSecurityScopedResource()
+        }
+
+        do {
+            let bookmark = try url.bookmarkData(
+                options: [.withSecurityScope],
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
+            customDirectoryBookmark = bookmark
+            customDirectoryPath = url.path
+
+            if url.startAccessingSecurityScopedResource() {
+                resolvedCustomDirectoryURL = url
+            } else {
+                print("Failed to start security-scoped access for \(url.path)")
+                resolvedCustomDirectoryURL = nil
+            }
+
+            loadExistingEntries()
+        } catch {
+            print("Failed to create security-scoped bookmark: \(error)")
+        }
+    }
+
+    private func resolveCustomDirectoryBookmark() {
+        guard !customDirectoryBookmark.isEmpty else {
+            // Stale path leftover from a build that didn't store bookmarks.
+            // The path string alone can't grant sandbox access, so clear it
+            // and fall back to the default folder until the user re-picks.
+            if !customDirectoryPath.isEmpty {
+                customDirectoryPath = ""
+            }
+            resolvedCustomDirectoryURL = nil
+            return
+        }
+
+        var isStale = false
+        do {
+            let url = try URL(
+                resolvingBookmarkData: customDirectoryBookmark,
+                options: [.withSecurityScope],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            )
+
+            if url.startAccessingSecurityScopedResource() {
+                resolvedCustomDirectoryURL = url
+
+                if isStale {
+                    if let refreshed = try? url.bookmarkData(
+                        options: [.withSecurityScope],
+                        includingResourceValuesForKeys: nil,
+                        relativeTo: nil
+                    ) {
+                        customDirectoryBookmark = refreshed
+                    }
+                }
+            } else {
+                print("Could not start accessing custom directory; clearing bookmark")
+                customDirectoryBookmark = Data()
+                customDirectoryPath = ""
+                resolvedCustomDirectoryURL = nil
+            }
+        } catch {
+            print("Bookmark resolve failed (\(error)); clearing")
+            customDirectoryBookmark = Data()
+            customDirectoryPath = ""
+            resolvedCustomDirectoryURL = nil
+        }
+    }
+
     private func resetToDefaultDirectory() {
+        if let prev = resolvedCustomDirectoryURL {
+            prev.stopAccessingSecurityScopedResource()
+        }
+        resolvedCustomDirectoryURL = nil
+        customDirectoryBookmark = Data()
         customDirectoryPath = ""
         loadExistingEntries()
     }
@@ -624,8 +782,8 @@ struct ContentView: View {
         print("Looking for entries in: \(documentsDirectory.path)")
         print("Looking for videos in: \(getVideosDirectory().path)")
 
-        // Migrate old-format filenames first
-        migrateOldFilenames()
+        // Note: filename migration intentionally disabled. The parser accepts
+        // legacy formats directly, so files load as-is without renaming.
 
         do {
             let fileURLs = try fileManager.contentsOfDirectory(at: documentsDirectory, includingPropertiesForKeys: nil)
@@ -984,13 +1142,15 @@ struct ContentView: View {
                                     .font(.custom(selectedFont, size: fontSize))
                                     .foregroundColor(colorScheme == .light ? .gray.opacity(0.5) : .gray.opacity(0.6))
                                     .allowsHitTesting(false)
-                                    .offset(x: 7, y: placeholderOffset)
+                                    // Match NSTextView's lineFragmentPadding (x=5) and
+                                    // textContainerInset.height (y=fontSize) so the placeholder
+                                    // sits exactly where the caret will be.
+                                    .offset(x: 5, y: placeholderOffset)
                             }
                         }, alignment: .topLeading
                     )
                     .id("\(selectedFont)-\(fontSize)-\(colorScheme)")
                     .padding(.bottom, bottomNavOpacity > 0 ? navHeight : 20)
-                    .ignoresSafeArea()
                     .colorScheme(colorScheme)
                     .onAppear {
                         placeholderText = placeholderText_default
@@ -1616,7 +1776,17 @@ struct ContentView: View {
                     .onHover { hovering in
                         isHoveringHistory = hovering
                     }
-                    
+                    .contextMenu {
+                        Button("Change Folder…") {
+                            selectCustomDirectory()
+                        }
+                        if !customDirectoryPath.isEmpty {
+                            Button("Reset to Default Folder") {
+                                resetToDefaultDirectory()
+                            }
+                        }
+                    }
+
                     Divider()
                     
                     // Entries List
@@ -1788,6 +1958,7 @@ struct ContentView: View {
         .preferredColorScheme(colorScheme)
         .onAppear {
             showingSidebar = false  // Hide sidebar by default
+            resolveCustomDirectoryBookmark()
             loadExistingEntries()
         }
         .onChange(of: showingVideoRecording) { _, isShowing in
@@ -1915,7 +2086,7 @@ struct ContentView: View {
     }
     
     private func createNewEntry() {
-        let newEntry = HumanEntry.createNew()
+        let newEntry = HumanEntry.createNew(in: getDocumentsDirectory())
         entries.insert(newEntry, at: 0) // Add to the beginning
         selectedEntryId = newEntry.id
         currentVideoURL = nil
@@ -1993,17 +2164,22 @@ struct ContentView: View {
 
         let videoEntry: HumanEntry
         if let replacementEntry {
-            let videoFilename = replacementEntry.filename.replacingOccurrences(of: ".md", with: ".mov")
+            // The empty text file uses a "freewrite" filename. Replace it with a
+            // proper "freewrite video" filename so on-disk naming matches the entry type.
+            let oldFileURL = getDocumentsDirectory().appendingPathComponent(replacementEntry.filename)
+            try? fileManager.removeItem(at: oldFileURL)
+
+            let template = HumanEntry.createVideoEntry(in: getDocumentsDirectory())
             videoEntry = HumanEntry(
                 id: replacementEntry.id,
-                date: replacementEntry.date,
-                filename: replacementEntry.filename,
+                date: template.date,
+                filename: template.filename,
                 previewText: previewTextFromTranscript(transcript),
                 entryType: .video,
-                videoFilename: videoFilename
+                videoFilename: template.videoFilename
             )
         } else {
-            let newEntry = HumanEntry.createVideoEntry()
+            let newEntry = HumanEntry.createVideoEntry(in: getDocumentsDirectory())
             videoEntry = HumanEntry(
                 id: newEntry.id,
                 date: newEntry.date,
