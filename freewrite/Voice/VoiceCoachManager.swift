@@ -1,6 +1,9 @@
 import Foundation
+#if canImport(LiveKit)
 @preconcurrency import LiveKit
+#endif
 
+#if canImport(LiveKit)
 @MainActor
 final class VoiceCoachManager: ObservableObject {
     enum Phase: Equatable {
@@ -19,9 +22,17 @@ final class VoiceCoachManager: ObservableObject {
     private var levelTask: Task<Void, Never>?
     private(set) var startedAt = Date()
     private(set) var sessionId: String = ""
+    private var entryRef: String?
+    private var entryType: String = "text"
+
+    // The agent picks the actual model; the client records the configured
+    // default (spec §5.4) for the saved session row.
+    private static let coachModel = "gemini-2.5-flash"
 
     func start(context: VoiceContext, entryId: String?) async {
         phase = .authenticating
+        entryRef = entryId
+        entryType = context.entryType.rawValue
         let auth = SupabaseAuth.shared
         if !auth.isSignedIn {
             do { try await auth.signInWithGoogle() }
@@ -59,6 +70,28 @@ final class VoiceCoachManager: ObservableObject {
         await room?.disconnect()
         room = nil
         phase = .ended
+        await persistTranscript()
+    }
+
+    /// Save the conversation locally and (best-effort) to Supabase on session end.
+    /// Skips when nothing was said or no session was established.
+    private func persistTranscript() async {
+        guard !sessionId.isEmpty, !transcript.isEmpty else { return }
+        let endedAt = Date()
+        let lines = transcript
+
+        VoiceTranscriptStore.saveLocal(
+            entryBase: entryRef ?? "transient",
+            sessionId: sessionId, lines: lines,
+            startedAt: startedAt, endedAt: endedAt)
+
+        if let userId = await SupabaseAuth.shared.currentUserId() {
+            await VoiceTranscriptStore.saveCloud(
+                client: SupabaseAuth.shared.supabase, userId: userId,
+                sessionId: sessionId, entryRef: entryRef, entryType: entryType,
+                lines: lines, startedAt: startedAt, endedAt: endedAt,
+                model: Self.coachModel)
+        }
     }
 
     private func startLevelPolling(_ room: Room) {
@@ -109,3 +142,59 @@ extension VoiceCoachManager: RoomDelegate {
         }
     }
 }
+#else
+@MainActor
+final class VoiceCoachManager: ObservableObject {
+    enum Phase: Equatable {
+        case idle, authenticating, connecting, listening, speaking, ended
+        case error(String)
+    }
+    @Published var phase: Phase = .idle
+    @Published var micMuted = false
+    @Published var micLevel: Float = 0
+    @Published private(set) var transcript: [TranscriptLine] = []
+
+    struct TranscriptLine: Identifiable { let id = UUID(); let speaker: String; let text: String }
+
+    private(set) var startedAt = Date()
+    private(set) var sessionId: String = ""
+    private var entryRef: String?
+    private var entryType: String = "text"
+
+    private static let coachModel = "gemini-2.5-flash"
+
+    func start(context: VoiceContext, entryId: String?) async {
+        // LiveKit not available in this build; surface a clear error state.
+        phase = .error("LiveKit is not available in this build configuration")
+    }
+
+    func toggleMute() async {
+        // No-op without LiveKit
+        micMuted.toggle()
+    }
+
+    func end() async {
+        phase = .ended
+        await persistTranscript()
+    }
+
+    private func persistTranscript() async {
+        // Keep local persistence logic minimal when LiveKit is unavailable.
+        guard !sessionId.isEmpty, !transcript.isEmpty else { return }
+        let endedAt = Date()
+        let lines = transcript
+        VoiceTranscriptStore.saveLocal(
+            entryBase: entryRef ?? "transient",
+            sessionId: sessionId, lines: lines,
+            startedAt: startedAt, endedAt: endedAt)
+        if let userId = await SupabaseAuth.shared.currentUserId() {
+            await VoiceTranscriptStore.saveCloud(
+                client: SupabaseAuth.shared.supabase, userId: userId,
+                sessionId: sessionId, entryRef: entryRef, entryType: entryType,
+                lines: lines, startedAt: startedAt, endedAt: endedAt,
+                model: Self.coachModel)
+        }
+    }
+}
+#endif
+
