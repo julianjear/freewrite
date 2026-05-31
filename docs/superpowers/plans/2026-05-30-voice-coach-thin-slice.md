@@ -10,6 +10,23 @@
 
 ---
 
+## Execution status (updated 2026-05-30)
+
+**Done + verified (autonomous, committed):**
+- ✅ **Part A — Worker**: all code, **13/13 vitest green**, `tsc` clean. Not yet deployed (Part E).
+- ✅ **Part B — Agent**: pure `coach/` logic **8/8 pytest green**; `agent.py` entrypoint written + syntax-checked. Not yet run live (Part E).
+- ✅ **Part C — Swift**: all 8 Voice files written and **compiled against real LiveKit 2.14.1 + Supabase 2.46.0** (`swift build` clean). Caught + fixed 3 real SDK-API bugs (`isFinal`, `didUpdateAttributes` participant type, transcription `trackPublication` arg). Button + overlay + context + OAuth callback wired into ContentView/freewriteApp (brace-balanced, symbols verified). Waveform redesigned (continuous TimelineView animation) after UI self-critique.
+- ✅ **Part D — Supabase**: `schema.sql` + RLS + runbook committed (provisioning is yours).
+
+**Blocked on you (needs accounts/secrets/voice — see Parts C0, D, E):**
+- ⬜ **C0**: add SPM packages (LiveKit, Supabase) in Xcode + run the XCTest target → full app build. *(Swift verified standalone; the Xcode project membership is the click I can't do.)*
+- ⬜ **D**: create Supabase project, enable Google, run `schema.sql`, paste URL/anon-key into `SupabaseAuth.swift`, `wrangler secret put SUPABASE_JWT_SECRET`.
+- ⬜ **E**: `wrangler deploy`; create LiveKit Cloud project + AI Gateway; `lk agent deploy`; fill the `YOUR-*` config literals; live smoke test.
+
+**Decision still open:** §5.4 LLM provider (default coded = Gemini via CF AI Gateway).
+
+---
+
 ## Execution boundary (read first)
 
 This plan is sequenced so the parts that need **no external accounts** come first and are fully verified here; the parts that need **your accounts/secrets or a human voice** are spelled out but flagged.
