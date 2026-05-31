@@ -12,7 +12,7 @@ import os
 from dotenv import load_dotenv
 from livekit import agents
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions
-from livekit.plugins import deepgram, elevenlabs, silero
+from livekit.plugins import deepgram, elevenlabs, google, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 from coach.context import parse_context
@@ -23,22 +23,24 @@ logger = logging.getLogger("freewrite-coach")
 
 AGENT_NAME = os.environ.get("COACH_AGENT_NAME", "freewrite-coach")
 
+# ElevenLabs voice for the coach. Single source of truth — change here.
+# (The elevenlabs plugin reads the API key from ELEVEN_API_KEY — note the
+# ELEVEN_ prefix, NOT ELEVENLABS_; this trips people up.)
+VOICE_ID = os.environ.get("COACH_VOICE_ID", "EST9Ui6982FZPSi7gCHi")
+
 
 def _build_llm():
-    """Spec section 5.4. DEFAULT = Option 2: Gemini via Cloudflare AI Gateway
-    (OpenAI-compatible base_url) so voice LLM spend is observable in Cloudflare.
+    """Native Gemini — same stack as Jungle (spec section 5.4, Option 1).
 
-    Switch options by editing this function only:
-      - Option 1 (native Gemini):   from livekit.plugins import google
-                                     return google.LLM(model=os.environ["GEMINI_MODEL"])
-      - Option 3 (Claude via CF):    model="anthropic/claude-...."
+    Reads GOOGLE_GEMINI_API_KEY (Gemini Developer API key). The model defaults
+    to gemini-2.5-flash and can be overridden per-deploy via COACH_LLM_MODEL.
+
+    Future: to route through Cloudflare AI Gateway for cost observability, swap
+    this to `openai.LLM(base_url=<CF gateway>/compat, api_key=<CF key>)`.
     """
-    from livekit.plugins import openai
-
-    return openai.LLM(
-        model=os.environ.get("COACH_LLM_MODEL", "google-ai-studio/gemini-2.5-flash"),
-        base_url=os.environ["CF_AI_GATEWAY_URL"],  # .../v1/<acct>/<gateway>/compat
-        api_key=os.environ["CF_AI_GATEWAY_KEY"],
+    return google.LLM(
+        model=os.environ.get("COACH_LLM_MODEL", "gemini-2.5-flash"),
+        api_key=os.environ["GOOGLE_GEMINI_API_KEY"],
     )
 
 
@@ -59,7 +61,7 @@ async def entrypoint(ctx: JobContext) -> None:
     session = AgentSession(
         stt=deepgram.STT(model="nova-3", language="multi"),
         llm=_build_llm(),
-        tts=elevenlabs.TTS(),
+        tts=elevenlabs.TTS(voice_id=VOICE_ID),
         vad=silero.VAD.load(),
         turn_detection=MultilingualModel(),
     )
