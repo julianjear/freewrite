@@ -36,24 +36,42 @@ final class VoiceCoachManager: ObservableObject {
             catch { phase = .error("Sign-in failed"); return }
         }
         phase = .connecting
+        // Token mint
+        let token: VoiceSessionToken
         do {
-            let token = try await VoiceTokenClient().mint(
+            token = try await VoiceTokenClient().mint(
                 context: context, entryId: entryId, accessToken: auth.currentToken())
-            sessionId = token.sessionId
-            startedAt = Date()
-            let room = Room()
-            room.add(delegate: self)
+        } catch let e as VoiceTokenError {
+            phase = .error(tokenErrorMessage(e)); return
+        } catch {
+            phase = .error("Token error: \(error.localizedDescription)"); return
+        }
+        sessionId = token.sessionId
+        startedAt = Date()
+
+        // Room connect
+        let room = Room()
+        room.add(delegate: self)
+        do {
             try await room.connect(url: token.wsURL.absoluteString, token: token.token,
                                    roomOptions: RoomOptions(adaptiveStream: true, dynacast: true))
-            try await room.localParticipant.setMicrophone(enabled: true)
-            self.room = room
-            phase = .listening
-            startLevelPolling(room)
-        } catch let e as VoiceTokenError {
-            phase = .error(tokenErrorMessage(e))
         } catch {
-            phase = .error("Couldn't reach the coach")
+            NSLog("[VoiceCoach] room.connect failed: \(error)")
+            phase = .error("Connect failed: \(error.localizedDescription)"); return
         }
+        self.room = room
+
+        // Mic publish — a failure here must NOT tear down the room (that's what
+        // made the agent see "room disconnected while waiting for participant").
+        do {
+            try await room.localParticipant.setMicrophone(enabled: true)
+        } catch {
+            NSLog("[VoiceCoach] setMicrophone failed: \(error)")
+            phase = .error("Mic failed: \(error.localizedDescription)"); return
+        }
+
+        phase = .listening
+        startLevelPolling(room)
     }
 
     func toggleMute() async {
