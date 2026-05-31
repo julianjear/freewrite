@@ -24,6 +24,10 @@ struct freewriteApp: App {
             ContentView()
                 .toolbar(.hidden, for: .windowToolbar)
                 .preferredColorScheme(colorSchemeString == "dark" ? .dark : .light)
+                .onOpenURL { url in
+                    // Supabase Google OAuth redirect (freewrite://auth-callback)
+                    Task { await SupabaseAuth.shared.handleCallback(url: url) }
+                }
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1100, height: 600)
