@@ -1,0 +1,11 @@
+name = "freewrite-voice-token"
+main = "src/index.ts"
+compatibility_date = "2024-11-27"
+compatibility_flags = ["nodejs_compat"]
+
+# Secrets (set with `wrangler secret put <NAME>` — never commit):
+#   LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, SUPABASE_JWT_SECRET
+[vars]
+COACH_AGENT_NAME = "freewrite-coach"
+ALLOWED_ORIGIN = "*"
+TOKEN_TTL_SECONDS = "1200"

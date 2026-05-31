@@ -1,0 +1,7 @@
+# Copy to .dev.vars and fill in. NEVER commit .dev.vars.
+LIVEKIT_URL=wss://your-project.livekit.cloud
+LIVEKIT_API_KEY=APIxxxxxxxx
+LIVEKIT_API_SECRET=secretxxxxxxxx
+SUPABASE_JWT_SECRET=your-supabase-jwt-secret
+COACH_AGENT_NAME=freewrite-coach
+ALLOWED_ORIGIN=*
