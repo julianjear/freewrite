@@ -74,7 +74,7 @@ Explicitly **out of scope** for v1, deferred to later phases:
         │ (5) persist  └─────────────────────────┘      │ Python Agent           │
         │ transcript                                     │ (LiveKit Cloud managed)│
         │ (local + cloud)                                │  STT → LLM → TTS       │
-        │                                                │  Deepgram│Claude│Cartesia│
+        │                                                │  Deepgram│Gemini│11Labs│
         └────────────────────────────────────────────────┤            │           │
                                                           └────────────┼───────────┘
                                                                        ▼
@@ -88,7 +88,7 @@ Explicitly **out of scope** for v1, deferred to later phases:
 - The agent is a **long-lived Python worker** holding a WebSocket + WebRTC session. It **cannot** run on Cloudflare Workers / serverless. It runs on **LiveKit Cloud managed agents** (`lk agent create`).
 - The **token endpoint** is a stateless JWT signer — a perfect Cloudflare Worker (LiveKit's JS SDK signs via Web Crypto, runs on Workers).
 - The **voice LLM** call originates inside the Python agent; we point it at **Cloudflare AI Gateway** via `base_url`, so even voice-model spend is observable in Cloudflare.
-- **Future non-voice LLM calls** (summaries/insights) run as a separate Cloudflare Worker → AI Gateway → Claude. Net: one Cloudflare AI Gateway for *all* model spend.
+- **Future non-voice LLM calls** (summaries/insights) run as a separate Cloudflare Worker → AI Gateway → Claude/Gemini. Net: one Cloudflare AI Gateway for *all* model spend.
 
 ---
 
@@ -191,7 +191,7 @@ Copied from `jungle-backend2/agents/jungle-voice-agent/` (LiveKit Agents 1.x, `A
 3. Worker verifies Supabase JWT, derives room name, embeds context in token metadata, signs LiveKit JWT, returns `{token, wsUrl, sessionId}`.
 4. Client `room.connect(...)`, enables mic. Overlay shows **connecting**.
 5. LiveKit dispatches the `freewrite-coach` agent into the room. Agent reads `participant.metadata.context`, builds prompt + opener, greets the user referencing what they wrote.
-6. Conversation runs: STT (Deepgram) → LLM (Claude via AI Gateway) → TTS (Cartesia). Client renders **listening/speaking** state + waveform; transcription streams to the client.
+6. Conversation runs: STT (Deepgram) → LLM (Gemini or Claude, §5.4) → TTS (ElevenLabs). Client renders **listening/speaking** state + waveform; transcription streams to the client.
 7. User ends (button) or session hits the **20-min cap** (auto-end). Client disconnects, agent leaves.
 8. Client **persists the transcript** locally (§8) and uploads a `voice_sessions` row to Supabase. Overlay shows a brief **ended** state, then closes back to the entry.
 
