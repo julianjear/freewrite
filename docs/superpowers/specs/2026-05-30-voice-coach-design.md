@@ -25,9 +25,9 @@ This is the first slice of a larger voice experience. We copy as much infrastruc
 | Access control | **Supabase Auth, Google sign-in only**; gate the voice feature behind sign-in |
 | Data persistence | Save voice-session data **both locally and to Supabase (cloud)** |
 | Coach tools (v1) | **None in v1** (thin slice). Tool roadmap decided below for later phases. |
-| Voice pipeline | **STT → LLM → TTS** with **Claude** as the LLM (not realtime speech-to-speech) |
+| Voice pipeline | **STT → LLM → TTS** (not realtime S2S). Jungle's real stack = **Deepgram + Gemini + ElevenLabs** (LiveKit Agents ~=1.5.13). LLM provider + routing is the one open decision — see §5.4. |
 | Agent hosting | **LiveKit Cloud managed agents** (Python worker) |
-| AI call routing | All LLM calls (voice + future non-voice) routed through **Cloudflare AI Gateway** |
+| AI call routing | Route LLM calls through **Cloudflare AI Gateway** where feasible (see §5.4 caveat for the voice LLM) |
 | API keys | Reuse Jungle's keys for now; store via `wrangler secret put` / Supabase secrets, never committed |
 
 ### Two flags accepted as part of "Jungle only"
@@ -104,7 +104,7 @@ Proposed files (new, isolated from `ContentView.swift` to avoid growing the 2,50
 
 - `VoiceCoachButton` — the bottom-nav button (mirrors the Chat button's hover/cursor styling). Disabled while a video recording is active (mic contention) and while no auth session can be established.
 - `VoiceCoachOverlay.swift` — the session UI, presented via `.overlay` (same pattern as `VideoRecordingView`), animations disabled for open/close (matches the video recorder convention).
-- `VoiceCoachManager.swift` — `@MainActor ObservableObject`. Owns the LiveKit `Room`, connection lifecycle, mute, mic-level polling for the waveform, transcription capture, and disconnect. State enum: `.idle → .authenticating → .connecting → .listening → .speaking → .ended/.error`. (Behavioral spec mirrored from Jungle web `VoiceState`.)
+- `VoiceCoachManager.swift` — `@MainActor ObservableObject`. Owns the LiveKit `Room`, connection lifecycle, mute, transcription capture, and disconnect. State enum: `.idle → .authenticating → .connecting → .listening → .speaking → .ended/.error`. The **listening/speaking** distinction is driven by the agent's **`lk.agent.state`** participant attribute (`initializing → listening → thinking → speaking`), exactly as the Jungle web client does; `room.localParticipant.audioLevel` is polled only to animate the waveform amplitude. (Behavioral spec mirrored from Jungle web `VoiceState`.)
 - `VoiceTokenClient.swift` — `POST {workerURL}/voice/token` with `Authorization: Bearer <supabase access token>`; body `{ context, entryRef }`; decodes `{ token, wsUrl, sessionId }`.
 - `VoiceTranscriptStore.swift` — collects transcription segments during the session; on end, writes locally + uploads to Supabase.
 - `VoiceWaveform.swift` — simple amplitude visualization driven by `room.localParticipant.audioLevel` (and the agent participant's level when speaking). Built fresh; minimalist to match Freewrite.
@@ -154,16 +154,32 @@ Copied from `jungle-backend2/agents/jungle-voice-agent/` (LiveKit Agents 1.x, `A
 
 - **Persona/prompt:** new coach prompt module (see §10). Drop the tutor "soul"; keep the *builder pattern* that injects per-session context.
 - **Context read:** at job start, `meta = json.loads(participant.metadata); context = meta.get("context")` → build the system prompt + a context-aware opener.
-- **Pipeline:** `AgentSession(stt=Deepgram, llm=Claude (Anthropic plugin, base_url → Cloudflare AI Gateway), tts=<Jungle's TTS, default Cartesia>, vad=Silero, turn_detection=<LiveKit default>)`.
-  > **Confirm at implementation:** read `requirements.txt` + the actual `AgentSession(...)` in `agent.py` and match Jungle's exact STT/TTS versions and the turn-detection setup. We deliberately set the **LLM to Claude** for coaching quality; if Jungle uses another LLM, that's our one intentional swap.
+- **Pipeline (Jungle's actual stack, confirmed in `agent.py:888-901`):**
+  ```
+  AgentSession(
+    stt = deepgram.STT(model="nova-3", language="multi"),
+    llm = <see decision below>,
+    tts = elevenlabs.TTS(...),
+    vad = silero.VAD.load(),
+    turn_detection = MultilingualModel(),   # livekit turn-detector plugin
+  )
+  ```
+  LiveKit Agents `~=1.5.13`. Plugins: `livekit-agents[deepgram,elevenlabs,google,silero,turn-detector]`.
+
+- **⚠️ Key decision — LLM provider & routing (the one real fork):** Jungle's voice LLM is **Google Gemini** via the native `google.LLM` plugin (`google-genai`, Gemini-3 thinking-level config), calling Google **directly** — *not* through Cloudflare, and *not* Claude. That collides with the "route AI through Cloudflare" preference and the earlier (mistaken) Claude assumption. Options:
+  1. **Match Jungle exactly** — native `google.LLM` (Gemini), direct to Google. Max copy-fidelity, full Gemini features (thinking config). Voice LLM does **not** flow through Cloudflare AI Gateway. *(Most faithful to "copy as much as you can.")*
+  2. **Gemini via Cloudflare AI Gateway** — swap the native plugin for `openai.LLM(base_url → CF AI Gateway compat endpoint, model="gemini-…")`. Keeps Jungle's "brain," honors the Cloudflare-routing goal, makes the model a one-line swap. Trade-off: the OpenAI-compat path may drop Gemini-specific extras (thinking-level config). *(Recommended — best balance.)*
+  3. **Swap to Claude via CF AI Gateway** — `openai.LLM(base_url → CF, model="claude-…")` or the Anthropic plugin. Anthropic-aligned, but deviates most from Jungle and costs more reasoning-wise.
+  - **Spec default = Option 2** unless Julian says otherwise at review. All three are a few lines apart; nothing else in the design changes.
 - **Dispatch:** register under `agent_name="freewrite-coach"`; defensive `request_fnc` accepting only our room-name pattern.
 - **No DB writes in v1:** the agent stays stateless; the **client** persists the transcript (keeps agent simple and avoids giving it Supabase creds in v1).
 
 ### 5.5 Cloudflare AI Gateway (CONFIG)
 
-**Purpose:** Single chokepoint for all model spend — caching, rate-limiting, cost, observability.
+**Purpose:** Single chokepoint for model spend — caching, rate-limiting, cost, observability.
 
-- Agent's Claude calls routed via the gateway's endpoint (`base_url`).
+- **Voice LLM:** routed via the gateway only if we pick §5.4 Option 2/3 (`base_url`). Option 1 (native Gemini) bypasses it.
+- **Future non-voice LLM calls** (summaries/insights, Phase 2+): always via the gateway from a Cloudflare Worker.
 - Free tier covers our volume; no token markup.
 
 ---
@@ -249,7 +265,7 @@ Local and cloud are written from the **same client code path** on session end; c
 
 Journal content is deeply personal. v1 sends data off-device along the voice path; this must be intentional and transparent:
 
-- **Leaves the device:** the (capped) entry text → Worker → token metadata → agent; audio → Deepgram (STT); text → Claude (LLM, via Cloudflare AI Gateway); agent text → Cartesia (TTS); the conversation transcript → Supabase.
+- **Leaves the device:** the (capped) entry text → Worker → token metadata → agent; audio → Deepgram (STT); text → the chosen LLM (Gemini or Claude, §5.4); agent text → ElevenLabs (TTS); the conversation transcript → Supabase.
 - **Stays local-first:** the journal entries themselves are **not** synced (only voice-session transcripts go to the cloud).
 - **Controls:** RLS on `voice_sessions`; short token TTL; Supabase tokens in Keychain; secrets server-side only.
 - **Consent:** first voice use shows a one-time, plain-language note that the conversation uses cloud AI services and is saved to your account. (Copy TBD by Julian.)
@@ -296,6 +312,7 @@ Detailed visual design (waveform, spacing, motion) is done at implementation, ap
 
 ## 12. Auth flow (OAuth in a sandboxed app)
 
+- **Entitlements (confirmed gap):** Freewrite's `freewrite.entitlements` today has app-sandbox, files.user-selected, camera, audio-input, speech-recognition — but **NOT** `com.apple.security.network.client`. Voice needs outbound network (LiveKit / Supabase / Worker), so **add `com.apple.security.network.client`**. `NSMicrophoneUsageDescription` already exists (from video) and is reused.
 - Add `supabase-swift` (SPM). Configure Google provider in Supabase.
 - Sign-in: `ASWebAuthenticationSession` (works under sandbox) with PKCE; redirect via registered URL scheme `freewrite://auth-callback`.
 - Tokens persisted in Keychain by the SDK; refresh handled automatically.
@@ -306,7 +323,7 @@ Detailed visual design (waveform, spacing, motion) is done at implementation, ap
 ## 13. Configuration & secrets
 
 - **Cloudflare Worker (secrets, never committed):** `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `SUPABASE_JWT_SECRET` (or project ref for JWKS), AI-gateway/provider keys as needed.
-- **Python agent (LiveKit Cloud secrets):** `LIVEKIT_URL/API_KEY/API_SECRET`, `DEEPGRAM_API_KEY`, `ANTHROPIC_API_KEY` (or AI-Gateway key + `base_url`), `CARTESIA_API_KEY` (confirm), `JUNGLE_AGENT_NAME=freewrite-coach`.
+- **Python agent (LiveKit Cloud secrets):** `LIVEKIT_URL/API_KEY/API_SECRET`, `DEEPGRAM_API_KEY`, `ELEVENLABS_API_KEY`, and the LLM key per §5.4 — `GEMINI_API_KEY`/Google key (Option 1) or the **CF AI Gateway** key + `base_url` (Option 2/3). `JUNGLE_AGENT_NAME=freewrite-coach`.
 - **App:** Supabase URL + anon key (anon key is publishable), Worker base URL, LiveKit not needed client-side beyond the returned `wsUrl`.
 - Reuse Jungle's keys initially; migrate to fresh keys later (Julian).
 
@@ -329,7 +346,7 @@ Per-stage, surfaced as a compact overlay message (mirroring Jungle's error taxon
 
 ## 15. Cost & guardrails
 
-- Low-volume estimate: **~$0–60/mo**, dominated by TTS. Pipeline (Claude) chosen partly because realtime S2S is ~3–5× the cost and can't use Claude.
+- Low-volume estimate: **~$40–110/mo**, dominated by **TTS**. Jungle uses **ElevenLabs** (~$0.09/min) — the priciest piece; swapping TTS to **Cartesia** (~$0.03/min) later cuts it ~3×. Pipeline chosen over realtime S2S (~3–5× cost).
 - **Guardrails:** session cap **20 min** (token TTL + client timer + agent-side limit); one concurrent session per user; agent billed only while serving. Even though access is authed, caps prevent runaway spend.
 
 ---
@@ -357,10 +374,10 @@ Ship v1 after 1c. Phases 2/3 (tools, summaries, RAG) are separate spec → plan 
 
 ## 18. Open questions / risks
 
-1. **Exact Jungle model stack** — confirm STT/TTS providers/versions + turn detection from `requirements.txt`/`agent.py` at implementation; match unless deliberately swapping (we swap LLM → Claude).
+1. **LLM provider + routing (§5.4)** — the one decision needing Julian's call: native Gemini (Option 1), Gemini-via-CF-Gateway (Option 2, default), or Claude-via-CF-Gateway (Option 3). Confirm whether `openai.LLM(base_url=CF gateway)` cleanly carries Gemini features we care about.
 2. **Long-entry context** — v1 caps at ~6 KB; validate this feels acceptable, or prioritize the data-channel handshake sooner.
 3. **Agent deploy specifics** — confirm `lk agent create` flow / `livekit.toml` for our project; how Jungle currently deploys its agent (for parity).
-4. **Provider zero-retention** — verify Deepgram/Anthropic/Cartesia retention settings for a privacy-sensitive product.
+4. **Provider zero-retention** — verify Deepgram / Gemini (or Claude) / ElevenLabs retention settings for a privacy-sensitive product.
 5. **Reusing Jungle keys** — fine for dev; note the LiveKit project/room namespace is shared with Jungle until we provision our own.
 
 ## 19. Security note (out of scope, flagged)
