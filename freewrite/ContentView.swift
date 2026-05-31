@@ -127,6 +127,9 @@ struct ContentView: View {
     @State private var isHoveringChat = false  // Add this state variable
     @State private var showingChatMenu = false
     @State private var chatMenuAnchor: CGPoint = .zero
+    @State private var isHoveringVoice = false
+    @State private var showingVoiceCoach = false
+    @StateObject private var voiceManager = VoiceCoachManager()
     @State private var showingSidebar = false  // Add this state variable
     @State private var hoveredTrashId: UUID? = nil
     @State private var hoveredExportId: UUID? = nil
@@ -1608,7 +1611,35 @@ struct ContentView: View {
                                     }
                                 }
                             }
-                            
+
+                            Text("•")
+                                .foregroundColor(.gray)
+
+                            // Voice coach — spoken conversation about the current entry.
+                            // Disabled while a video recording is active (mic contention).
+                            Button("Voice") {
+                                let ctx = currentVoiceContext()
+                                let entryId = selectedEntryId?.uuidString
+                                var transaction = Transaction()
+                                transaction.disablesAnimations = true
+                                withTransaction(transaction) {
+                                    showingVoiceCoach = true
+                                }
+                                Task { await voiceManager.start(context: ctx, entryId: entryId) }
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundColor(isHoveringVoice ? textHoverColor : textColor)
+                            .disabled(showingVideoRecording || isPreparingVideoRecording)
+                            .onHover { hovering in
+                                isHoveringVoice = hovering
+                                isHoveringBottomNav = hovering
+                                if hovering {
+                                    NSCursor.pointingHand.push()
+                                } else {
+                                    NSCursor.pop()
+                                }
+                            }
+
                             Text("•")
                                 .foregroundColor(.gray)
 
@@ -1953,6 +1984,19 @@ struct ContentView: View {
                 .zIndex(10)
             }
         }
+        .overlay {
+            if showingVoiceCoach {
+                VoiceCoachOverlay(manager: voiceManager, colorScheme: colorScheme) {
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        showingVoiceCoach = false
+                    }
+                }
+                .zIndex(11)
+                .transition(.identity)
+            }
+        }
         .frame(minWidth: 1100, minHeight: 600)
         .animation(.easeInOut(duration: 0.2), value: showingSidebar)
         .preferredColorScheme(colorScheme)
@@ -2151,6 +2195,26 @@ struct ContentView: View {
             return transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Builds the per-session context handed to the voice coach: the current
+    /// text body, or a video entry's saved transcript. Capping happens inside
+    /// VoiceContext.make (most-recent ~6KB), so long entries stay under the
+    /// JWT size limit.
+    private func currentVoiceContext() -> VoiceContext {
+        let selectedEntry = selectedEntryId.flatMap { id in entries.first(where: { $0.id == id }) }
+        let entryDate = selectedEntry?.date ?? ""
+        if currentVideoURL != nil {
+            let transcript: String? = selectedEntry
+                .flatMap { resolvedVideoFilename(for: $0) }
+                .flatMap { loadTranscriptText(for: $0) }
+            let body = (transcript ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return VoiceContext.make(entryType: .video, entryDate: entryDate,
+                                     entryText: body, hasTranscript: !body.isEmpty)
+        }
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return VoiceContext.make(entryType: .text, entryDate: entryDate,
+                                 entryText: body, hasTranscript: false)
     }
 
     private func saveVideoEntry(from tempURL: URL, transcript: String?) {
