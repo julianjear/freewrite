@@ -1,9 +1,6 @@
 import Foundation
-#if canImport(LiveKit)
 @preconcurrency import LiveKit
-#endif
 
-#if canImport(LiveKit)
 @MainActor
 final class VoiceCoachManager: ObservableObject {
     enum Phase: Equatable {
@@ -142,59 +139,3 @@ extension VoiceCoachManager: RoomDelegate {
         }
     }
 }
-#else
-@MainActor
-final class VoiceCoachManager: ObservableObject {
-    enum Phase: Equatable {
-        case idle, authenticating, connecting, listening, speaking, ended
-        case error(String)
-    }
-    @Published var phase: Phase = .idle
-    @Published var micMuted = false
-    @Published var micLevel: Float = 0
-    @Published private(set) var transcript: [TranscriptLine] = []
-
-    struct TranscriptLine: Identifiable { let id = UUID(); let speaker: String; let text: String }
-
-    private(set) var startedAt = Date()
-    private(set) var sessionId: String = ""
-    private var entryRef: String?
-    private var entryType: String = "text"
-
-    private static let coachModel = "gemini-2.5-flash"
-
-    func start(context: VoiceContext, entryId: String?) async {
-        // LiveKit not available in this build; surface a clear error state.
-        phase = .error("LiveKit is not available in this build configuration")
-    }
-
-    func toggleMute() async {
-        // No-op without LiveKit
-        micMuted.toggle()
-    }
-
-    func end() async {
-        phase = .ended
-        await persistTranscript()
-    }
-
-    private func persistTranscript() async {
-        // Keep local persistence logic minimal when LiveKit is unavailable.
-        guard !sessionId.isEmpty, !transcript.isEmpty else { return }
-        let endedAt = Date()
-        let lines = transcript
-        VoiceTranscriptStore.saveLocal(
-            entryBase: entryRef ?? "transient",
-            sessionId: sessionId, lines: lines,
-            startedAt: startedAt, endedAt: endedAt)
-        if let userId = await SupabaseAuth.shared.currentUserId() {
-            await VoiceTranscriptStore.saveCloud(
-                client: SupabaseAuth.shared.supabase, userId: userId,
-                sessionId: sessionId, entryRef: entryRef, entryType: entryType,
-                lines: lines, startedAt: startedAt, endedAt: endedAt,
-                model: Self.coachModel)
-        }
-    }
-}
-#endif
-
