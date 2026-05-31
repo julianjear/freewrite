@@ -5,7 +5,7 @@ import { handleToken, type Env } from "./index";
 // jose's generateKeyPair returns KeyLike; cast to CryptoKey to satisfy tsc
 // (identical at runtime on Web Crypto).
 async function es256() {
-  const { publicKey, privateKey } = await es256();
+  const { publicKey, privateKey } = await generateKeyPair("ES256");
   return { publicKey: publicKey as CryptoKey, privateKey: privateKey as CryptoKey };
 }
 

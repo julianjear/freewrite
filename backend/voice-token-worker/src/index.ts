@@ -1,5 +1,4 @@
-import { jwtVerify } from "jose";
-import { verifySupabaseJWT, supabaseJWKS } from "./auth";
+import { verifySupabaseJWT, supabaseJWKS, type VerifyKey } from "./auth";
 import { signLiveKitToken } from "./token";
 import {
   capEntryText,
@@ -47,7 +46,7 @@ function json(body: unknown, status: number, env: Env): Response {
 export async function handleToken(
   request: Request,
   env: Env,
-  verifyKey?: Parameters<typeof jwtVerify>[1],
+  verifyKey?: VerifyKey,
 ): Promise<Response> {
   // Auth
   const authHeader = request.headers.get("authorization") ?? "";

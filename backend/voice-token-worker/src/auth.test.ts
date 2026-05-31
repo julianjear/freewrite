@@ -7,7 +7,7 @@ const ISSUER = "https://test.supabase.co/auth/v1";
 // jose's generateKeyPair returns KeyLike; at runtime on Web Crypto these ARE
 // CryptoKey, but the static types differ. Cast to keep tsc happy.
 async function es256() {
-  const { publicKey, privateKey } = await es256();
+  const { publicKey, privateKey } = await generateKeyPair("ES256");
   return { publicKey: publicKey as CryptoKey, privateKey: privateKey as CryptoKey };
 }
 
