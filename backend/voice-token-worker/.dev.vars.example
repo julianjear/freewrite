@@ -1,7 +1,6 @@
 # Copy to .dev.vars and fill in. NEVER commit .dev.vars.
+# SUPABASE_URL lives in wrangler.toml [vars] (public, not a secret).
+# Supabase auth needs no secret — tokens are ES256, verified via public JWKS.
 LIVEKIT_URL=wss://your-project.livekit.cloud
 LIVEKIT_API_KEY=APIxxxxxxxx
 LIVEKIT_API_SECRET=secretxxxxxxxx
-SUPABASE_JWT_SECRET=your-supabase-jwt-secret
-COACH_AGENT_NAME=freewrite-coach
-ALLOWED_ORIGIN=*

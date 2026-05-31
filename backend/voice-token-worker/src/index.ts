@@ -1,4 +1,5 @@
-import { verifySupabaseJWT } from "./auth";
+import { jwtVerify } from "jose";
+import { verifySupabaseJWT, supabaseJWKS } from "./auth";
 import { signLiveKitToken } from "./token";
 import {
   capEntryText,
@@ -11,10 +12,19 @@ export interface Env {
   LIVEKIT_URL: string;
   LIVEKIT_API_KEY: string;
   LIVEKIT_API_SECRET: string;
-  SUPABASE_JWT_SECRET: string;
+  SUPABASE_URL: string;
   COACH_AGENT_NAME: string;
   ALLOWED_ORIGIN: string;
   TOKEN_TTL_SECONDS: string;
+}
+
+// Cache the JWKS resolver per Supabase URL across requests in this isolate.
+let cachedJwks: { url: string; getKey: ReturnType<typeof supabaseJWKS> } | null = null;
+function jwksFor(url: string): ReturnType<typeof supabaseJWKS> {
+  if (!cachedJwks || cachedJwks.url !== url) {
+    cachedJwks = { url, getKey: supabaseJWKS(url) };
+  }
+  return cachedJwks.getKey;
 }
 
 function cors(env: Env): Record<string, string> {
@@ -32,7 +42,13 @@ function json(body: unknown, status: number, env: Env): Response {
   });
 }
 
-export async function handleToken(request: Request, env: Env): Promise<Response> {
+// `verifyKey` is injectable for tests (a local public key); in production it
+// defaults to the cached remote JWKS resolver for env.SUPABASE_URL.
+export async function handleToken(
+  request: Request,
+  env: Env,
+  verifyKey?: Parameters<typeof jwtVerify>[1],
+): Promise<Response> {
   // Auth
   const authHeader = request.headers.get("authorization") ?? "";
   if (!authHeader.startsWith("Bearer ")) {
@@ -40,7 +56,11 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
   }
   let user;
   try {
-    user = await verifySupabaseJWT(authHeader.slice(7).trim(), env.SUPABASE_JWT_SECRET);
+    user = await verifySupabaseJWT(
+      authHeader.slice(7).trim(),
+      verifyKey ?? jwksFor(env.SUPABASE_URL),
+      { issuer: `${env.SUPABASE_URL}/auth/v1` },
+    );
   } catch {
     return json({ error: "invalid token" }, 401, env);
   }

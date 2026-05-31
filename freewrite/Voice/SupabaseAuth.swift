@@ -5,10 +5,10 @@ import Supabase
 final class SupabaseAuth: ObservableObject {
     static let shared = SupabaseAuth()
 
-    // Set from your Supabase project (anon key is publishable).
+    // Supabase project (publishable key — safe to ship in the client).
     private let client = SupabaseClient(
-        supabaseURL: URL(string: "https://YOUR-PROJECT.supabase.co")!,
-        supabaseKey: "YOUR-ANON-KEY"
+        supabaseURL: URL(string: "https://glzxxdwlsttayuoajycq.supabase.co")!,
+        supabaseKey: "sb_publishable_UmMcVy-1CFwG-AT6kyzRyw_hq89U1Ie"
     )
 
     @Published var accessToken: String?

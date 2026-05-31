@@ -4,8 +4,11 @@ compatibility_date = "2024-11-27"
 compatibility_flags = ["nodejs_compat"]
 
 # Secrets (set with `wrangler secret put <NAME>` — never commit):
-#   LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, SUPABASE_JWT_SECRET
+#   LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET
+# Supabase auth needs NO secret: tokens are ES256, verified against the project's
+# public JWKS at $SUPABASE_URL/auth/v1/.well-known/jwks.json.
 [vars]
+SUPABASE_URL = "https://glzxxdwlsttayuoajycq.supabase.co"
 COACH_AGENT_NAME = "freewrite-coach"
 ALLOWED_ORIGIN = "*"
 TOKEN_TTL_SECONDS = "1200"
