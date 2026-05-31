@@ -1266,12 +1266,15 @@ git commit -m "feat(agent): LiveKit entrypoint over tested coach package"
 
 **Reality:** I write all Swift files now. The **Codable context + capping** unit is TDD'd against the existing `freewriteTests` target. But **adding the LiveKit + Supabase SPM packages and building** must happen in the Xcode you have open (hand-editing `project.pbxproj` for SPM is fragile and would fight your open Xcode). After you add the two packages (Task C0), the written code compiles.
 
-### Task C0: Add SPM packages + entitlement (YOUR click, exact steps)
+### Task C0: Add SPM packages (YOUR click — exact steps)
 
-- [ ] **Step 1:** In Xcode (open on this worktree): File ▸ Add Package Dependencies → `https://github.com/livekit/client-sdk-swift` → Up to Next Major `2.5.0` → add **LiveKit** to the `freewrite` target.
-- [ ] **Step 2:** Repeat: `https://github.com/supabase/supabase-swift` → add **Supabase** to the `freewrite` target.
-- [ ] **Step 3:** Add the network-client entitlement (Task C1 edits the file; confirm Xcode picks it up).
-- [ ] **Step 4:** Build (⌘B) once to resolve packages. Expected: builds clean (no code uses the SDKs yet until later tasks).
+> **Good news:** the project uses Xcode **synchronized file groups** (`PBXFileSystemSynchronizedRootGroup` for `freewrite/` and `freewriteTests/`), so the new `freewrite/Voice/*.swift` files and `freewriteTests/VoiceContextTests.swift` are **auto-included** in their targets — you do NOT add them manually. Only the two SPM packages need adding.
+
+- [ ] **Step 1:** In Xcode (open on this worktree): File ▸ Add Package Dependencies → `https://github.com/livekit/client-sdk-swift` → Up to Next Major `2.5.0` → add **LiveKit** to the `freewrite` target. (Verified to resolve at 2.14.1.)
+- [ ] **Step 2:** Repeat: `https://github.com/supabase/supabase-swift` → add **Supabase** to the `freewrite` target. (Verified to resolve at 2.46.0.)
+- [ ] **Step 3:** Entitlement already added (Task C1, committed). Confirm Xcode shows `com.apple.security.network.client` enabled.
+- [ ] **Step 4:** Build (⌘B). Expected: BUILD SUCCEEDED. Then run the test target (⌘U) — `VoiceContextTests` (3 tests) should pass.
+- [ ] **Step 5:** Register the URL scheme: target ▸ Info ▸ URL Types ▸ add identifier `freewrite`, scheme `freewrite` (for the OAuth callback `freewrite://auth-callback`).
 
 ### Task C1: Add `network.client` entitlement
 
