@@ -9,8 +9,8 @@ struct VoiceSessionToken {
 enum VoiceTokenError: Error { case notAuthenticated, badResponse(Int), badURL }
 
 struct VoiceTokenClient {
-    // Set to your deployed Worker, e.g. https://freewrite-voice-token.<you>.workers.dev
-    static let workerBaseURL = URL(string: "https://YOUR-WORKER.workers.dev")!
+    // Deployed Cloudflare Worker (infinite@julian.ai account).
+    static let workerBaseURL = URL(string: "https://freewrite-voice-token.infinite-0b9.workers.dev")!
 
     func mint(context: VoiceContext, entryId: String?, accessToken: String?) async throws -> VoiceSessionToken {
         guard let accessToken else { throw VoiceTokenError.notAuthenticated }
