@@ -3,6 +3,10 @@ main = "src/index.ts"
 compatibility_date = "2024-11-27"
 compatibility_flags = ["nodejs_compat"]
 
+# Deploy to the Jungle Cloudflare account (currently logged in via wrangler).
+# This is a NEW, separate worker — it does not touch Jungle's existing workers.
+account_id = "037b83e22b426027405cbac5f19476ef"
+
 # Secrets (set with `wrangler secret put <NAME>` — never commit):
 #   LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET
 # Supabase auth needs NO secret: tokens are ES256, verified against the project's
