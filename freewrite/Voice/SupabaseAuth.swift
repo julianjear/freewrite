@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import Supabase
 
 @MainActor
@@ -14,6 +15,9 @@ final class SupabaseAuth: ObservableObject {
     @Published var accessToken: String?
     @Published var isSignedIn = false
 
+    // Lets start() await the OAuth deep-link callback instead of returning early.
+    private var pendingSignIn: CheckedContinuation<Void, Error>?
+
     /// Expose the client so the transcript store can insert rows under RLS.
     var supabase: SupabaseClient { client }
 
@@ -24,21 +28,38 @@ final class SupabaseAuth: ObservableObject {
         }
     }
 
-    /// Opens Google OAuth in the system browser; redirect scheme freewrite://auth-callback
+    /// Opens Google OAuth in the user's DEFAULT browser (not Safari/ASWebAuth).
+    /// We build the provider URL and hand it to NSWorkspace; the browser then
+    /// redirects to freewrite://auth-callback, which `handleCallback` consumes.
+    /// Suspends until that callback resolves the session (or times out).
     func signInWithGoogle() async throws {
-        let session = try await client.auth.signInWithOAuth(
+        let url = try client.auth.getOAuthSignInURL(
             provider: .google,
             redirectTo: URL(string: "freewrite://auth-callback")!
         )
-        accessToken = session.accessToken
-        isSignedIn = true
+        NSWorkspace.shared.open(url)
+
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            self.pendingSignIn = cont
+            // Safety timeout so the UI doesn't hang forever if the user bails.
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 180 * 1_000_000_000)
+                guard let self, let pending = self.pendingSignIn else { return }
+                self.pendingSignIn = nil
+                pending.resume(throwing: URLError(.timedOut))
+            }
+        }
     }
 
+    /// Called from freewriteApp's .onOpenURL when the browser redirects back.
     func handleCallback(url: URL) async {
-        try? await client.auth.session(from: url)
-        if let session = try? await client.auth.session {
+        do {
+            let session = try await client.auth.session(from: url)
             accessToken = session.accessToken
             isSignedIn = true
+            pendingSignIn?.resume(); pendingSignIn = nil
+        } catch {
+            pendingSignIn?.resume(throwing: error); pendingSignIn = nil
         }
     }
 
