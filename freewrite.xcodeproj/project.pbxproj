@@ -39,16 +39,22 @@
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		2857D4722D5F8A8000EE1012 /* freewrite */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = freewrite;
 			sourceTree = "<group>";
 		};
 		2857D4842D5F8A8100EE1012 /* freewriteTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = freewriteTests;
 			sourceTree = "<group>";
 		};
 		2857D48E2D5F8A8100EE1012 /* freewriteUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = freewriteUITests;
 			sourceTree = "<group>";
 		};
@@ -112,7 +118,6 @@
 				2857D46C2D5F8A8000EE1012 /* Sources */,
 				2857D46D2D5F8A8000EE1012 /* Frameworks */,
 				2857D46E2D5F8A8000EE1012 /* Resources */,
-				4D8934B51B71F8912FD52302 /* Register freewrite:// URL scheme */,
 			);
 			buildRules = (
 			);
@@ -434,6 +439,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = freewrite/Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Freewrite needs camera access to record video entries.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Freewrite needs microphone access to record audio with your video entries.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Freewrite uses speech recognition to show live captions while recording.";
@@ -480,6 +486,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = freewrite/Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Freewrite needs camera access to record video entries.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Freewrite needs microphone access to record audio with your video entries.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Freewrite uses speech recognition to show live captions while recording.";
