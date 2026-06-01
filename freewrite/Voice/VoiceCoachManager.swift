@@ -27,6 +27,10 @@ final class VoiceCoachManager: ObservableObject {
     // default (spec §5.4) for the saved session row.
     private static let coachModel = "gemini-2.5-flash"
 
+    // Voice-processing can only be toggled before the peer connection inits,
+    // so we do it once per process and remember it.
+    nonisolated(unsafe) private static var voiceProcessingDisabled = false
+
     func start(context: VoiceContext, entryId: String?) async {
         phase = .authenticating
         entryRef = entryId
@@ -59,6 +63,23 @@ final class VoiceCoachManager: ObservableObject {
         }
         sessionId = token.sessionId
         startedAt = Date()
+
+        // Disable Apple's Voice-Processing I/O (echo canceller). On macOS its
+        // aggregate device frequently fails to build ("reference channel count
+        // is 0" → "Timeout waiting for streams" → HAL error 35 / -10877), which
+        // makes setMicrophone time out AND kills agent playback (VPIO is one
+        // bidirectional unit). Turning it off uses a plain audio path. Must be
+        // set before the peer connection initializes (i.e. before Room.connect).
+        // Trade-off: no hardware echo cancellation — fine for headphones; if
+        // speaker echo becomes an issue we can revisit with a server-side AEC.
+        if VoiceCoachManager.voiceProcessingDisabled == false {
+            do {
+                try AudioManager.shared.setVoiceProcessingEnabled(false)
+                VoiceCoachManager.voiceProcessingDisabled = true
+            } catch {
+                NSLog("[VoiceCoach] setVoiceProcessingEnabled(false) failed: \(error)")
+            }
+        }
 
         // Room connect
         let room = Room()
