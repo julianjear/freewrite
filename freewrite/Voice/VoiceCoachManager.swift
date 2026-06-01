@@ -27,11 +27,31 @@ final class VoiceCoachManager: ObservableObject {
     // default (spec §5.4) for the saved session row.
     private static let coachModel = "gemini-2.5-flash"
 
-    // Voice-processing can only be toggled before the peer connection inits,
-    // so we do it once per process and remember it.
-    nonisolated(unsafe) private static var voiceProcessingDisabled = false
+    // One-time audio device module selection, done before any peer connection.
+    nonisolated(unsafe) private static var admConfigured = false
+
+    /// Select WebRTC's native HAL-based audio device module on macOS instead of
+    /// the default AVAudioEngine ADM. The AVAudioEngine path fails on this Mac
+    /// with `AVAudioEngineGraph Start: kAUStartIO error 35` (it can't start the
+    /// audio unit — fights the system/other LiveKit apps over the device), which
+    /// blocks BOTH mic publish and agent playback. `.platformDefault` uses HAL
+    /// APIs directly and sidesteps AVAudioEngine entirely. MUST run before the
+    /// first Room is created. Idempotent + safe to call once per process.
+    static func configureAudioDeviceModuleIfNeeded() {
+        guard !admConfigured else { return }
+        do {
+            try AudioManager.set(audioDeviceModuleType: .platformDefault)
+            admConfigured = true
+            NSLog("[VoiceCoach] audioDeviceModuleType = .platformDefault")
+        } catch {
+            NSLog("[VoiceCoach] set(audioDeviceModuleType:) failed: \(error)")
+        }
+    }
 
     func start(context: VoiceContext, entryId: String?) async {
+        // Must precede any Room()/peer-connection init.
+        VoiceCoachManager.configureAudioDeviceModuleIfNeeded()
+
         phase = .authenticating
         entryRef = entryId
         entryType = context.entryType.rawValue
@@ -63,34 +83,6 @@ final class VoiceCoachManager: ObservableObject {
         }
         sessionId = token.sessionId
         startedAt = Date()
-
-        // Disable Apple's Voice-Processing I/O (echo canceller). On macOS its
-        // aggregate device frequently fails to build ("reference channel count
-        // is 0" → "Timeout waiting for streams" → HAL error 35 / -10877), which
-        // makes setMicrophone time out AND kills agent playback (VPIO is one
-        // bidirectional unit). Turning it off uses a plain audio path. Must be
-        // set before the peer connection initializes (i.e. before Room.connect).
-        // Trade-off: no hardware echo cancellation — fine for headphones; if
-        // speaker echo becomes an issue we can revisit with a server-side AEC.
-        if VoiceCoachManager.voiceProcessingDisabled == false {
-            do {
-                try AudioManager.shared.setVoiceProcessingEnabled(false)
-                VoiceCoachManager.voiceProcessingDisabled = true
-            } catch {
-                NSLog("[VoiceCoach] setVoiceProcessingEnabled(false) failed: \(error)")
-            }
-        }
-
-        // Make LiveKit's audio engine available before we publish the mic.
-        // Without this the engine isn't in a startable state and AVAudioEngine
-        // I/O fails with `kAUStartIO error 35` (device busy). We set it back to
-        // .none on end() so the engine releases the mic hardware between
-        // sessions (Cosmic does the same dance for this exact bug).
-        do {
-            try AudioManager.shared.setEngineAvailability(.default)
-        } catch {
-            NSLog("[VoiceCoach] setEngineAvailability(.default) failed: \(error)")
-        }
 
         // Room connect
         let room = Room()
@@ -127,11 +119,6 @@ final class VoiceCoachManager: ObservableObject {
         levelTask?.cancel(); levelTask = nil
         await room?.disconnect()
         room = nil
-        // Release the audio engine so it frees the mic hardware between
-        // sessions; otherwise the next connect can hit the -10877/error-35
-        // "device busy" storm.
-        do { try AudioManager.shared.setEngineAvailability(.none) }
-        catch { NSLog("[VoiceCoach] setEngineAvailability(.none) failed: \(error)") }
         phase = .ended
         await persistTranscript()
     }
