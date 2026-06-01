@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Partial Info.plist: merged with Xcode's generated keys
+         (GENERATE_INFOPLIST_FILE=YES). Only declares what the generator
+         can't express — the freewrite:// URL scheme for the Supabase
+         OAuth redirect (freewrite://auth-callback → .onOpenURL). -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>app.julian.freewrite</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>freewrite</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>
