@@ -81,6 +81,17 @@ final class VoiceCoachManager: ObservableObject {
             }
         }
 
+        // Make LiveKit's audio engine available before we publish the mic.
+        // Without this the engine isn't in a startable state and AVAudioEngine
+        // I/O fails with `kAUStartIO error 35` (device busy). We set it back to
+        // .none on end() so the engine releases the mic hardware between
+        // sessions (Cosmic does the same dance for this exact bug).
+        do {
+            try AudioManager.shared.setEngineAvailability(.default)
+        } catch {
+            NSLog("[VoiceCoach] setEngineAvailability(.default) failed: \(error)")
+        }
+
         // Room connect
         let room = Room()
         room.add(delegate: self)
@@ -116,6 +127,11 @@ final class VoiceCoachManager: ObservableObject {
         levelTask?.cancel(); levelTask = nil
         await room?.disconnect()
         room = nil
+        // Release the audio engine so it frees the mic hardware between
+        // sessions; otherwise the next connect can hit the -10877/error-35
+        // "device busy" storm.
+        do { try AudioManager.shared.setEngineAvailability(.none) }
+        catch { NSLog("[VoiceCoach] setEngineAvailability(.none) failed: \(error)") }
         phase = .ended
         await persistTranscript()
     }
