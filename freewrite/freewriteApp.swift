@@ -24,6 +24,11 @@ struct freewriteApp: App {
             ContentView()
                 .toolbar(.hidden, for: .windowToolbar)
                 .preferredColorScheme(colorSchemeString == "dark" ? .dark : .light)
+                .task {
+                    // Restore a previously saved Supabase session from the
+                    // keychain so the user isn't forced to sign in every launch.
+                    await SupabaseAuth.shared.restore()
+                }
                 .onOpenURL { url in
                     // Supabase Google OAuth redirect (freewrite://auth-callback)
                     Task { await SupabaseAuth.shared.handleCallback(url: url) }

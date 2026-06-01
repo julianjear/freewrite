@@ -1,4 +1,5 @@
 import Foundation
+import AVFoundation
 @preconcurrency import LiveKit
 
 @MainActor
@@ -30,6 +31,16 @@ final class VoiceCoachManager: ObservableObject {
         phase = .authenticating
         entryRef = entryId
         entryType = context.entryType.rawValue
+
+        // Mic permission MUST be granted before LiveKit starts its voice-
+        // processing I/O unit. Without it the VPIO unit fails to start
+        // (-10877 / HAL error 35), which kills BOTH mic capture and agent
+        // playback — you connect but hear nothing and the publish times out.
+        guard await ensureMicPermission() else {
+            phase = .error("Microphone access is needed. Enable it in System Settings ▸ Privacy ▸ Microphone.")
+            return
+        }
+
         let auth = SupabaseAuth.shared
         if !auth.isSignedIn {
             do { try await auth.signInWithGoogle() }
@@ -115,6 +126,18 @@ final class VoiceCoachManager: ObservableObject {
                 self?.micLevel = room.localParticipant.audioLevel
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
+        }
+    }
+
+    /// Ensure microphone authorization before LiveKit touches the audio unit.
+    private func ensureMicPermission() async -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            return true
+        case .notDetermined:
+            return await AVCaptureDevice.requestAccess(for: .audio)
+        default:
+            return false   // denied / restricted
         }
     }
 
