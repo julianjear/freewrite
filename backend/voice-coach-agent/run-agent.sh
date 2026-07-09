@@ -21,11 +21,11 @@ PIDFILE=/tmp/freewrite-coach.supervisor.pid
 case "${1:-start}" in
   stop)
     [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null && rm -f "$PIDFILE"
-    pkill -f "voice-coach-agent/.venv/bin/python agent.py" 2>/dev/null
+    pkill -f "agent.py dev" 2>/dev/null
     echo "stopped"
     ;;
   status)
-    if pgrep -f "voice-coach-agent/.venv/bin/python agent.py" >/dev/null; then
+    if pgrep -f "agent.py dev" >/dev/null; then
       echo "agent RUNNING (log: $LOG)"
     else
       echo "agent NOT running"
@@ -41,7 +41,7 @@ case "${1:-start}" in
     done
     ;;
   start|*)
-    if pgrep -f "voice-coach-agent/.venv/bin/python agent.py" >/dev/null; then
+    if pgrep -f "agent.py dev" >/dev/null; then
       echo "already running (log: $LOG)"; exit 0
     fi
     nohup "$DIR/run-agent.sh" _supervise >/dev/null 2>&1 &
