@@ -39,22 +39,16 @@
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		2857D4722D5F8A8000EE1012 /* freewrite */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = freewrite;
 			sourceTree = "<group>";
 		};
 		2857D4842D5F8A8100EE1012 /* freewriteTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = freewriteTests;
 			sourceTree = "<group>";
 		};
 		2857D48E2D5F8A8100EE1012 /* freewriteUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = freewriteUITests;
 			sourceTree = "<group>";
 		};
@@ -249,27 +243,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
-
-/* Begin PBXShellScriptBuildPhase section */
-		4D8934B51B71F8912FD52302 /* Register freewrite:// URL scheme */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-			);
-			name = "Register freewrite:// URL scheme";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "# Inject CFBundleURLTypes into the generated Info.plist so the\n# freewrite://auth-callback OAuth redirect reaches the app (.onOpenURL).\nPLIST=\"${TARGET_BUILD_DIR}/${INFOPLIST_PATH}\"\nif [ -z \"${INFOPLIST_PATH}\" ] || [ ! -f \"$PLIST\" ]; then\n  echo \"warning: Info.plist not found at $PLIST — skipping URL scheme injection\"\n  exit 0\nfi\n/usr/libexec/PlistBuddy -c \"Delete :CFBundleURLTypes\" \"$PLIST\" 2>/dev/null || true\n/usr/libexec/PlistBuddy \\\n  -c \"Add :CFBundleURLTypes array\" \\\n  -c \"Add :CFBundleURLTypes:0 dict\" \\\n  -c \"Add :CFBundleURLTypes:0:CFBundleURLName string Sahibzada.freewrite\" \\\n  -c \"Add :CFBundleURLTypes:0:CFBundleURLSchemes array\" \\\n  -c \"Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string freewrite\" \\\n  \"$PLIST\"\necho \"Registered freewrite:// URL scheme in $PLIST\"\n";
-		};
-/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		2857D46C2D5F8A8000EE1012 /* Sources */ = {
