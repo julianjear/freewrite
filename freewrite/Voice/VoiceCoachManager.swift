@@ -15,7 +15,9 @@ final class VoiceCoachManager: ObservableObject {
         case error(String)
     }
 
-    @Published var phase: Phase = .idle
+    @Published var phase: Phase = .idle {
+        didSet { VoiceCallSounds.shared.handleTransition(from: oldValue, to: phase) }
+    }
     @Published var micMuted = false
     @Published var micLevel: Float = 0     // drives the waveform
     @Published private(set) var transcript: [TranscriptLine] = []

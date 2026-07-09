@@ -67,9 +67,9 @@ async def entrypoint(ctx: JobContext) -> None:
     )
 
     await session.start(agent=Agent(instructions=system_prompt), room=ctx.room)
-    await session.generate_reply(
-        instructions=f"Greet the writer. Say exactly: {opener}"
-    )
+    # say() speaks the fixed opener straight through TTS — no LLM roundtrip —
+    # so the coach's first words arrive noticeably faster than generate_reply.
+    await session.say(opener)
 
 
 def _request_fnc(req: agents.JobRequest):

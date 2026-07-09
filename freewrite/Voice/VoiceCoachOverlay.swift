@@ -63,7 +63,7 @@ struct VoiceCoachOverlay: View {
     private var statusText: String {
         switch manager.phase {
         case .authenticating: return "Signing in…"
-        case .connecting: return "Connecting to your coach…"
+        case .connecting: return "Calling…"
         case .listening: return manager.micMuted ? "Muted" : "Listening…"
         case .speaking: return "Coach is speaking…"
         case .ended, .idle: return ""
