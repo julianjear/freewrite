@@ -41,6 +41,13 @@ case "${1:-start}" in
     done
     ;;
   start|*)
+    # The launchd LaunchAgent (ai.julian.freewrite-coach) normally owns the
+    # agent. Refuse to double-serve dispatches alongside it.
+    if launchctl print "gui/$(id -u)/ai.julian.freewrite-coach" >/dev/null 2>&1; then
+      echo "LaunchAgent ai.julian.freewrite-coach is loaded — it owns the agent."
+      echo "Use: launchctl kickstart -k gui/\$UID/ai.julian.freewrite-coach"
+      exit 0
+    fi
     if pgrep -f "agent.py dev" >/dev/null; then
       echo "already running (log: $LOG)"; exit 0
     fi

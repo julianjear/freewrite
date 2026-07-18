@@ -974,6 +974,50 @@ Check `~/Documents/Freewrite/` in Finder to verify files are being created.
 - `ForEach(entries)` with `Identifiable` for list rendering
 - Conditional views: `if currentVideoURL != nil { VideoPlayerView } else { TextEditor }`
 
+## Voice Coach (AI voice conversations)
+
+A "Voice" button (bottom nav, next to Chat) starts a spoken AI-coaching call
+seeded with the current entry (text body, or a video entry's transcript).
+
+**Architecture:** `freewrite/Voice/` (Swift, LiveKit SDK) → Cloudflare Worker
+`backend/voice-token-worker/` verifies the Supabase (Google-only, ES256/JWKS)
+session and mints a LiveKit JWT carrying the entry context in its `metadata`
+claim → LiveKit dispatches the Python agent `backend/voice-coach-agent/`
+(Deepgram STT → Gemini → ElevenLabs TTS; persona = SOUL doc in
+`coach/prompt.py`) → transcript saved locally under
+`~/Documents/Freewrite/VoiceSessions/` and to Supabase `voice_sessions` (RLS).
+
+> **⚠️ NOT PROD-READY — the agent runs locally.** The coach agent is a local
+> process on Julian's Mac, kept alive by a launchd LaunchAgent
+> (`~/Library/LaunchAgents/ai.julian.freewrite-coach.plist`; logs at
+> `/tmp/freewrite-coach.log`). This is intentional for fast iteration.
+> **Shipping to anyone else requires deploying the agent to LiveKit Cloud**
+> (`lk agent deploy`; Dockerfile ready) — see the deploy checklist in
+> `backend/voice-coach-agent/README.md`, then unload the LaunchAgent so local
+> and cloud don't both serve dispatches.
+
+**Debugging:** filter app console on `[VoiceCoach]` (full lifecycle is logged).
+"Coach doesn't speak" → run the headless probe
+`backend/voice-coach-agent/tools/e2e_probe.py` — it joins like the app and
+measures the coach's actual TTS audio, isolating backend vs app issues.
+
+**Hard-won gotchas (do not regress):**
+- LiveKit's default AVAudioEngine audio module fails on this Mac
+  (`kAUStartIO error 35`); `VoiceCoachManager` must set
+  `AudioManager.set(audioDeviceModuleType: .platformDefault)` before the first
+  `Room`.
+- App Sandbox must stay OFF — it blocks LiveKit's regional WebSocket failover
+  ("Region manager error (No more remaining regions)").
+- Supabase auth session is stored in a FILE (`FileAuthLocalStorage`), not the
+  keychain — ad-hoc dev signatures change every build, so keychain "Always
+  Allow" can never stick.
+- The ElevenLabs plugin reads `ELEVEN_API_KEY` (not `ELEVENLABS_API_KEY`).
+- The `freewrite://` URL scheme (OAuth callback) is registered via the partial
+  `freewrite/Info.plist` merged with `GENERATE_INFOPLIST_FILE` — don't remove
+  either half.
+- Call sounds (calling loop / answered / hang-up, ported from Jungle) are
+  driven by phase transitions in `VoiceCallSounds.swift`.
+
 ## Summary
 
 Freewrite is a straightforward macOS writing app with video recording capabilities. All data is local, no backend required. The main complexity is in:
