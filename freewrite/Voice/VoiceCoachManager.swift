@@ -65,6 +65,7 @@ final class VoiceCoachManager: ObservableObject {
         for: .documentDirectory, in: .userDomainMask
     )[0].appendingPathComponent("Freewrite", isDirectory: true)
     private var recentTranscriptKeys: [String: Date] = [:]
+    private var hasPersistedSession = false
 
     private static let coachJoinTimeout: UInt64 = 15_000_000_000
     nonisolated(unsafe) private static var admConfigured = false
@@ -99,6 +100,7 @@ final class VoiceCoachManager: ObservableObject {
         lastCompletedCall = nil
         sessionId = ""
         isEnding = false
+        hasPersistedSession = false
 
         vclog("start profile=\(configuration.profileId) entryType=\(entryType) chars=\(context.entryText.count)")
         phase = .authenticating
@@ -147,9 +149,10 @@ final class VoiceCoachManager: ObservableObject {
             vclog("room connected and mic published")
         } catch {
             vclog("room/mic setup FAILED: \(error)")
-            await room.disconnect()
-            self.room = nil
-            phase = .error("Connect failed: \(error.localizedDescription)")
+            await failActiveCall(
+                "Connect failed: \(error.localizedDescription)",
+                disconnectedRoom: room
+            )
             return
         }
 
@@ -238,6 +241,11 @@ final class VoiceCoachManager: ObservableObject {
             vclog("persist skipped: session empty")
             return nil
         }
+        guard !hasPersistedSession else {
+            vclog("persist skipped: session already saved")
+            return nil
+        }
+        hasPersistedSession = true
         let endedAt = Date()
         let lines = transcript
         let events = telemetryEvents
@@ -310,7 +318,8 @@ final class VoiceCoachManager: ObservableObject {
         }
     }
 
-    private func failActiveCall(_ message: String) async {
+    private func failActiveCall(_ message: String,
+                                disconnectedRoom: Room? = nil) async {
         guard phase != .ended, !isEnding else { return }
         coachJoinTimeoutTask?.cancel()
         coachJoinTimeoutTask = nil
@@ -318,10 +327,13 @@ final class VoiceCoachManager: ObservableObject {
         levelTask = nil
         micLevel = 0
 
-        let failedRoom = room
+        let failedRoom = room ?? disconnectedRoom
         room = nil
         phase = .error(message)
         await failedRoom?.disconnect()
+        if let failed = await persistSession() {
+            durationSeconds = failed.durationSeconds
+        }
     }
 
     private func receiveArtifact(_ data: Data) {

@@ -1218,10 +1218,11 @@ measures actual agent audio. Use `--profile` to choose a model and
 - Fatal coach configuration, non-recoverable agent-session telemetry errors,
   and unexpected coach disconnects in any active room phase must cancel level
   polling and disconnect the LiveKit room so a failed call cannot leave the
-  microphone published. Failed or never-connected attempts still persist raw
-  telemetry for diagnosis but do not publish a completed-call card into chat.
-  Supervisor and recoverable provider errors remain visible in observability
-  without ending an otherwise live call.
+  microphone published. Failed or never-connected attempts with a minted
+  session ID persist raw telemetry immediately and exactly once for diagnosis,
+  but do not publish a completed-call card into chat. Supervisor and
+  recoverable provider errors remain visible in observability without ending
+  an otherwise live call.
 - LiveKit participant metadata with an explicit invalid `voiceConfig` must
   publish a configuration error and stop. Never silently benchmark a fallback
   model when the selected profile or controls are invalid.
