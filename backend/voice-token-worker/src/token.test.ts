@@ -28,7 +28,10 @@ describe("signLiveKitToken", () => {
     expect(video.room).toBe("freewrite-user-abc-entry-1-1700000000000");
     expect(video.roomJoin).toBe(true);
     expect(video.canPublish).toBe(true);
+    expect(video.canPublishSources).toEqual(["microphone"]);
+    expect(video.canPublishData).toBe(false);
     expect(video.canSubscribe).toBe(true);
+    expect(video.canUpdateOwnMetadata).toBe(false);
     expect(payload.metadata).toBe(JSON.stringify({ userId: "user-abc" }));
     const roomConfig = payload.roomConfig as Record<string, any>;
     expect(roomConfig.agents[0].agentName).toBe("freewrite-coach");

@@ -1,86 +1,135 @@
 # Freewrite Voice Coach Agent
 
-Pure logic lives in `coach/` (unit-tested, no livekit import). `agent.py` is the
-LiveKit entrypoint. Stack mirrors Jungle: Deepgram STT → native Gemini LLM →
-ElevenLabs TTS, with Silero VAD + the multilingual turn detector.
+`agent.py` is the LiveKit entrypoint; provider-neutral configuration, prompts,
+background deliberation, and telemetry live in `coach/` and are unit-tested.
 
-> ## ⚠️ NOT PROD-READY: the agent runs LOCALLY on Julian's Mac
->
-> The coach currently runs as a **local process on one machine** (managed by a
-> launchd LaunchAgent — see below). This is a deliberate dev-speed choice:
-> local runs make prompt/pipeline iteration instant.
->
-> **Before this feature ships to anyone else, the agent MUST be deployed to
-> LiveKit Cloud** (`lk agent deploy` — Dockerfile is ready). Until then:
-> - Voice only works while Julian's Mac is on and logged in.
-> - Every reboot briefly interrupts the agent (launchd restarts it at login).
-> - If the worktree moves/merges, the LaunchAgent's paths must be updated.
->
-> Deploy checklist when the time comes: `lk cloud auth` (link the freeflow
-> project) → `lk agent create` → `lk agent deploy` → set the secrets from
-> `.env` in LiveKit Cloud → `launchctl bootout gui/$UID/ai.julian.freewrite-coach`
-> and delete the plist so local + cloud don't both serve dispatches.
+## Runtime architecture
 
-## How it runs today (local dev)
+The macOS Voice Lab sends a versioned `voiceConfig` through the token Worker and
+LiveKit participant metadata. `coach/config.py` validates the profile again so
+unknown models never silently fall back and contaminate A/B results.
 
-A **launchd LaunchAgent** (`~/Library/LaunchAgents/ai.julian.freewrite-coach.plist`)
-starts the agent at login and auto-restarts it if it crashes (verified by
-kill-test). It runs `.venv/bin/python agent.py dev` from THIS directory —
-absolute paths, so keep the worktree in place or update the plist.
+The token Worker also preflights selected voice and strategist providers
+against non-secret enabled-provider lists. Keep those lists synchronized with
+credentials on this active agent whenever keys are added or removed. Backend
+configuration failures are published over telemetry before teardown; the app
+does not treat RTC participant presence alone as call readiness.
 
-    launchctl print  gui/$UID/ai.julian.freewrite-coach   # status
-    launchctl kickstart -k gui/$UID/ai.julian.freewrite-coach  # force restart
-    launchctl bootout   gui/$UID/ai.julian.freewrite-coach     # stop + disable
-    tail -f /tmp/freewrite-coach.log                           # logs
+Two call architectures use the exact same `build_system_prompt`:
 
-`run-agent.sh` (start/stop/status) is the ad-hoc fallback — it refuses to start
-if the LaunchAgent is loaded, so the two can't double-serve.
+- **Cascade (default):** Deepgram Nova-3 → selected text LLM → ElevenLabs
+  `eleven_flash_v2_5`, with Silero VAD and LiveKit's current acoustic + semantic
+  `TurnDetector`.
+- **Native realtime:** OpenAI Realtime, Gemini Flash Live, or Grok Voice owns
+  audio understanding, turn-taking, reasoning, and speech generation.
 
-## Verify end-to-end without a human
+Flux is an advanced cascade experiment. It replaces Nova-3 plus LiveKit's turn
+detector with `flux-general-en` and `turn_handling.turn_detection="stt"`. It is not the
+default because its integrated EOT value overlaps LiveKit's newer audio-aware
+detector, while Nova keeps broader multilingual support and keyterm behavior.
 
-    ./.venv/bin/python tools/e2e_probe.py
+### Profile catalog
 
-Mints a token exactly like the Cloudflare Worker (same metadata, same
-`freewrite-` room prefix, same explicit dispatch), joins, publishes a mic
-track, then measures the coach's TTS audio and prints the transcript.
-PASS = agent joined AND spoke audibly. Exit codes: 1 never joined (agent
-down?), 2 no audio track, 3 silent audio (TTS key?). **Run this first when
-"the coach doesn't speak."**
+| Profile | Architecture | Required provider key |
+|---|---|---|
+| `cascade-gemini-3.5-flash` (default) | Cascade | Google |
+| `cascade-gemini-3.1-flash-lite` | Cascade | Google |
+| `cascade-gemini-3-flash-preview` | Cascade | Google |
+| `cascade-gemini-2.5-flash` | Cascade baseline | Google |
+| `cascade-gpt-5.6-terra` | Cascade | OpenAI |
+| `cascade-claude-haiku-4.5` | Cascade | Anthropic |
+| `realtime-gpt-2.1` / `realtime-gpt-2.1-mini` | Native | OpenAI |
+| `realtime-gemini-3.1-flash-live-preview` | Native | Google |
+| `realtime-grok-think-fast` | Native | xAI |
 
-## Test the pure logic (offline)
+Gemini 3.1 Flash Live is a listen-first profile: its API ignores
+`generate_reply`, instruction updates, and chat-context updates after the first
+turn. It answers the user's first spoken turn; the in-app console records this
+capability rather than pretending an opener or strategist injection succeeded.
 
-    ./.venv/bin/python -m pytest -v
+## Background strategist
 
-## Required env (secrets — local `.env` today; LiveKit Cloud secrets when deployed)
+When enabled, `DeliberationCoordinator` snapshots changed transcript turns on a
+15/20/30-second cadence (30 seconds by default) and asks the selected Gemini,
+Claude Sonnet 5, Claude Opus 4.8, or GPT-5.6 Sol strategist for a small
+structured `CoachingBrief`. Provider-valid thinking effort is selectable. This
+work is outside the live reply path.
 
-| Var | Purpose |
-|-----|---------|
-| `LIVEKIT_URL` | wss URL of the LiveKit project (freeflow) |
-| `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | LiveKit project creds |
-| `GOOGLE_GEMINI_API_KEY` | Gemini Developer API key (the LLM) |
-| `DEEPGRAM_API_KEY` | STT |
-| `ELEVEN_API_KEY` | TTS — **note the `ELEVEN_` prefix, not `ELEVENLABS_`** |
+The brief is advisory and contains summary, themes, direction, one recommended
+move, candidate questions, risks, and confidence—never hidden chain-of-thought.
+It is injected into the complete system context before the next response for
+providers that support dynamic instructions and is always available through
+`get_coaching_brief`. Gemini Live uses the explicit, observable tool fallback.
 
-Optional overrides: `COACH_LLM_MODEL` (default `gemini-2.5-flash`),
-`COACH_VOICE_ID` (default set in agent.py), `COACH_AGENT_NAME`
-(default `freewrite-coach`).
+## Observability
 
-## Dispatch / isolation
+LiveKit Cloud remains the durable trace/session-recording surface. In addition,
+the agent publishes compact JSON on reliable data topic
+`freewrite.voice.telemetry`:
 
-Registered under `agent_name = freewrite-coach`. `_request_fnc` only accepts
-rooms whose name starts with `freewrite-` (the Worker mints
-`freewrite-<userId>-<entry>-<ts>`), so it never picks up another project's
-calls even though it shares LiveKit infra conventions with Jungle.
+- accepted config and lifecycle/capability events;
+- sampled cumulative provider usage and estimated list-price cost;
+- per-turn EOT, LLM, TTS, playback, and end-to-end latency;
+- transcripts, errors, and structured strategist briefs.
 
-## Prompt
+The app displays these in a toggleable developer console and saves
+`transcript.md`, `meta.json`, `events.json`, and `analyses.json` under
+`~/Documents/Freewrite/VoiceSessions/<entry>/<session>/`. Completed sessions are
+also inserted into Supabase under RLS. Cost is explicitly an estimate; provider
+credits, discounts, cached-token policies, and price changes can differ.
 
-`coach/prompt.py` = the SOUL persona + a voice-session frame (live call inside
-Freewrite right after a writing session; short TTS-safe spoken turns) + the
-entry context injected by `build_system_prompt`. The opener is spoken via
-`session.say()` (no LLM roundtrip → first words ~2s after join).
+## Local runtime status
 
-## LLM provider (spec 5.4)
+> **Not production-ready:** the agent currently runs on Julian's Mac through
+> `~/Library/LaunchAgents/ai.julian.freewrite-coach.plist` and logs to
+> `/tmp/freewrite-coach.log`. Shipping requires `lk agent deploy` with every
+> provider secret, then unloading the local LaunchAgent so two workers do not
+> compete for dispatches.
 
-`_build_llm()` uses **native Gemini** (`google.LLM` + `GOOGLE_GEMINI_API_KEY`) —
-Jungle's proven path. To route through Cloudflare AI Gateway later for cost
-observability, swap that one function to `openai.LLM(base_url=<gateway>/compat)`.
+Useful commands:
+
+```bash
+launchctl print gui/$UID/ai.julian.freewrite-coach
+launchctl kickstart -k gui/$UID/ai.julian.freewrite-coach
+tail -f /tmp/freewrite-coach.log
+```
+
+`run-agent.sh` is the ad-hoc supervisor fallback and refuses to double-start
+while the LaunchAgent is loaded.
+
+## Verification
+
+```bash
+./.venv/bin/python -m pytest -q
+./.venv/bin/python tools/e2e_probe.py
+./.venv/bin/python tools/e2e_probe.py \
+  --profile realtime-gemini-3.1-flash-live-preview \
+  --user-utterance "I keep avoiding the sales call. What do you notice?"
+```
+
+The probe mints the same metadata shape, joins a `freewrite-` room, publishes a
+microphone track, and requires audible agent output. `--user-utterance` renders
+local macOS speech for listen-first/native pipeline tests without another API.
+
+## Environment
+
+| Variable | Purpose |
+|---|---|
+| `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | LiveKit connection, dispatch, and inference |
+| `GOOGLE_GEMINI_API_KEY` | Google cascade, Gemini Live, and Gemini strategist |
+| `DEEPGRAM_API_KEY` | Cascade STT |
+| `ELEVEN_API_KEY` | Cascade TTS (not `ELEVENLABS_API_KEY`) |
+| `OPENAI_API_KEY` | OpenAI cascade/realtime profiles and GPT strategist |
+| `ANTHROPIC_API_KEY` | Claude cascade profile and Sonnet/Opus strategist |
+| `XAI_API_KEY` | Grok native profile |
+
+Optional voice overrides: `COACH_VOICE_ID`, `COACH_OPENAI_VOICE`,
+`COACH_GEMINI_VOICE`, `COACH_XAI_VOICE`, and `COACH_AGENT_NAME`.
+
+## Dispatch and prompt invariants
+
+The worker registers as `freewrite-coach` and only accepts opaque room names
+beginning `freewrite-`. Room names must not embed user or entry IDs. The SOUL,
+voice rules, entry context, strategist contract, and current brief are assembled
+only by `coach/prompt.py:build_system_prompt`; provider factories must not fork
+their own persona.

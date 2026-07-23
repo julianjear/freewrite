@@ -10,6 +10,8 @@ def test_parse_valid_metadata():
             "entryDate": "May 30",
             "entryText": "I keep avoiding it.",
             "hasTranscript": False,
+            "chatHistory": "Julian: I am stuck.\n\nFreewrite AI: What is the choice?",
+            "startingQuestion": "What would you choose without fear?",
             "truncated": False,
             "modality": "voice",
         },
@@ -19,6 +21,8 @@ def test_parse_valid_metadata():
     assert ctx.entry_type == "text"
     assert ctx.entry_text == "I keep avoiding it."
     assert ctx.entry_date == "May 30"
+    assert "I am stuck" in ctx.chat_history
+    assert ctx.starting_question == "What would you choose without fear?"
 
 
 def test_parse_missing_or_bad_metadata_returns_empty():

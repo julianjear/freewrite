@@ -7,16 +7,27 @@ struct VoiceContext: Codable {
     let entryDate: String
     let entryText: String
     let hasTranscript: Bool
+    let chatHistory: String
+    let startingQuestion: String?
     let truncated: Bool
     let modality: String   // always "voice"
 
     static let maxEntryBytes = 6144
+    static let maxChatBytes = 5120
+    static let maxQuestionBytes = 1200
 
     static func make(entryType: EntryKind, entryDate: String,
-                     entryText: String, hasTranscript: Bool) -> VoiceContext {
+                     entryText: String, hasTranscript: Bool,
+                     chatHistory: String = "", startingQuestion: String? = nil) -> VoiceContext {
         let (capped, truncated) = capTail(entryText, maxBytes: maxEntryBytes)
+        let (cappedChat, _) = capTail(chatHistory, maxBytes: maxChatBytes)
+        let cappedQuestion = startingQuestion.map {
+            capTail($0, maxBytes: maxQuestionBytes).0
+        }
         return VoiceContext(entryType: entryType, entryDate: entryDate,
                             entryText: capped, hasTranscript: hasTranscript,
+                            chatHistory: cappedChat,
+                            startingQuestion: cappedQuestion,
                             truncated: truncated, modality: "voice")
     }
 

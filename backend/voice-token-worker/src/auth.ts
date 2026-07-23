@@ -24,15 +24,19 @@ export function supabaseJWKS(supabaseUrl: string): ReturnType<typeof createRemot
 export async function verifySupabaseJWT(
   token: string,
   key: VerifyKey,
-  opts?: { issuer?: string },
+  opts?: { issuer?: string; audience?: string },
 ): Promise<AuthedUser> {
-  const options = opts?.issuer ? { issuer: opts.issuer } : {};
+  const options = {
+    ...(opts?.issuer ? { issuer: opts.issuer } : {}),
+    ...(opts?.audience ? { audience: opts.audience } : {}),
+  };
   const { payload } =
     typeof key === "function"
       ? await jwtVerify(token, key, options)
       : await jwtVerify(token, key, options);
   const userId = typeof payload.sub === "string" ? payload.sub : "";
   if (!userId) throw new Error("token has no subject");
+  if (payload.role !== "authenticated") throw new Error("token is not an authenticated user");
   const email = typeof payload.email === "string" ? payload.email : null;
   return { userId, email };
 }

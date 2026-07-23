@@ -1,4 +1,5 @@
-# LiveKit Agents voice stack (mirrors Jungle).
-livekit-agents[deepgram,elevenlabs,google,silero,turn-detector]~=1.5.13
-google-genai>=1.55,<3
+# Both cascade and native realtime providers. LiveKit 1.6 adds the acoustic +
+# semantic TurnDetector used by the default Nova-3 pipeline.
+livekit-agents[anthropic,deepgram,elevenlabs,google,openai,silero,xai]~=1.6.6
+google-genai>=1.68,<3
 python-dotenv>=1.0.0

@@ -1,47 +1,37 @@
-"""Freewrite Voice Coach — LiveKit agent entrypoint.
-
-Thin glue over the unit-tested `coach/` package. Mirrors Jungle's read pattern:
-reads the per-session context the Cloudflare Worker put in the JWT metadata,
-builds the coach system prompt, and runs the Deepgram->LLM->ElevenLabs loop.
-"""
+"""Freewrite Voice Coach — configurable LiveKit voice-agent entrypoint."""
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import os
 
 from dotenv import load_dotenv
 from livekit import agents
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions
-from livekit.plugins import deepgram, elevenlabs, google, silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from livekit.agents.llm import ChatMessage
 
+from coach.config import VoiceSessionConfig, parse_voice_config
+from coach.artifacts import VoiceArtifactPublisher
 from coach.context import parse_context
-from coach.prompt import build_system_prompt, build_opener
+from coach.deliberation import DeliberationCoordinator, create_brief_analyzer
+from coach.prompt import build_opener, build_system_prompt
+from coach.providers import build_session_components
+from coach.telemetry import TelemetryPublisher
 
 load_dotenv()
 logger = logging.getLogger("freewrite-coach")
-
 AGENT_NAME = os.environ.get("COACH_AGENT_NAME", "freewrite-coach")
 
-# ElevenLabs voice for the coach. Single source of truth — change here.
-# (The elevenlabs plugin reads the API key from ELEVEN_API_KEY — note the
-# ELEVEN_ prefix, NOT ELEVENLABS_; this trips people up.)
-VOICE_ID = os.environ.get("COACH_VOICE_ID", "EST9Ui6982FZPSi7gCHi")
 
-
-def _build_llm():
-    """Native Gemini — same stack as Jungle (spec section 5.4, Option 1).
-
-    Reads GOOGLE_GEMINI_API_KEY (Gemini Developer API key). The model defaults
-    to gemini-2.5-flash and can be overridden per-deploy via COACH_LLM_MODEL.
-
-    Future: to route through Cloudflare AI Gateway for cost observability, swap
-    this to `openai.LLM(base_url=<CF gateway>/compat, api_key=<CF key>)`.
-    """
-    return google.LLM(
-        model=os.environ.get("COACH_LLM_MODEL", "gemini-2.5-flash"),
-        api_key=os.environ["GOOGLE_GEMINI_API_KEY"],
-    )
+def _metadata_config(metadata: str | None) -> VoiceSessionConfig:
+    if not metadata:
+        return VoiceSessionConfig()
+    try:
+        value = json.loads(metadata)
+    except (TypeError, json.JSONDecodeError):
+        return VoiceSessionConfig()
+    return parse_voice_config(value.get("voiceConfig"))
 
 
 async def entrypoint(ctx: JobContext) -> None:
@@ -49,31 +39,136 @@ async def entrypoint(ctx: JobContext) -> None:
     participant = await ctx.wait_for_participant()
 
     coach_ctx = parse_context(participant.metadata)
+    config = _metadata_config(participant.metadata)
     system_prompt = build_system_prompt(coach_ctx)
-    opener = build_opener(coach_ctx)
+    telemetry = TelemetryPublisher(ctx.room, ctx.room.name, config)
+
+    analyzer = None
+    try:
+        components = build_session_components(config, system_prompt)
+        if config.supervisor_enabled:
+            analyzer = create_brief_analyzer(config)
+    except Exception as exc:
+        logger.exception("coach configuration failed")
+        await telemetry.publish(
+            "error", "configuration",
+            {"message": str(exc), "profileId": config.profile_id, "supervisorModel": config.supervisor_model},
+        )
+        # Give the reliable data packet a bounded opportunity to leave before
+        # the failed job tears down its RTC participant.
+        await asyncio.sleep(0.25)
+        raise
+    coordinator = DeliberationCoordinator(
+        config=config,
+        analyzer=analyzer,
+        publish=telemetry.publish,
+        base_context=coach_ctx,
+    )
+    artifacts = VoiceArtifactPublisher(ctx.room, ctx.room.name, telemetry.publish)
+    coach_agent = Agent(
+        instructions=system_prompt,
+        tools=[coordinator.tool(), artifacts.image_search_tool()],
+    )
+    coordinator.bind_agent(coach_agent)
+
+    session = AgentSession(**components.session_kwargs)
+
+    @session.on("session_usage_updated")
+    def _on_usage(event) -> None:
+        asyncio.create_task(telemetry.publish_usage(event.usage))
+
+    @session.on("conversation_item_added")
+    def _on_conversation_item(event) -> None:
+        item = event.item
+        if not isinstance(item, ChatMessage):
+            return
+        text = item.text_content or item.raw_text_content
+        if not text:
+            return
+        coordinator.add_message(str(item.role), text)
+        asyncio.create_task(
+            telemetry.publish(
+                "transcript", "conversation",
+                {"role": str(item.role), "text": text, "interrupted": item.interrupted},
+            )
+        )
+        if item.metrics:
+            asyncio.create_task(
+                telemetry.publish(
+                    "metric", "turn-latency",
+                    {"role": str(item.role), **dict(item.metrics)},
+                )
+            )
+
+    @session.on("eot_prediction")
+    def _on_eot(event) -> None:
+        asyncio.create_task(
+            telemetry.publish(
+                "turn", "eot-prediction",
+                {
+                    "probability": event.probability,
+                    "threshold": event.threshold,
+                    "inferenceDuration": event.inference_duration,
+                    "delay": event.delay,
+                },
+            )
+        )
+
+    @session.on("error")
+    def _on_error(event) -> None:
+        asyncio.create_task(
+            telemetry.publish(
+                "error", "agent-session",
+                {"message": str(event.error), "source": type(event.source).__name__},
+            )
+        )
+
+    async def _shutdown() -> None:
+        await coordinator.stop()
+        # LiveKit invokes shutdown callbacks after the RTC engine can already be
+        # closed. Publishing here creates a false observability error; the
+        # session-close reason remains available in LiveKit's durable report.
+
+    ctx.add_shutdown_callback(_shutdown)
+
     logger.info(
-        "coach session room=%s entry_type=%s has_text=%s",
+        "coach session room=%s profile=%s pipeline=%s entry_type=%s has_text=%s",
         ctx.room.name,
+        config.profile_id,
+        components.profile_label,
         coach_ctx.entry_type,
         bool(coach_ctx.entry_text),
     )
 
-    session = AgentSession(
-        stt=deepgram.STT(model="nova-3", language="multi"),
-        llm=_build_llm(),
-        tts=elevenlabs.TTS(voice_id=VOICE_ID),
-        vad=silero.VAD.load(),
-        turn_detection=MultilingualModel(),
+    await session.start(agent=coach_agent, room=ctx.room)
+    await telemetry.publish(
+        "config", "session",
+        {**config.to_public_dict(), "pipelineLabel": components.profile_label},
     )
+    await telemetry.publish("lifecycle", "session", {"status": "ready"})
+    coordinator.start()
 
-    await session.start(agent=Agent(instructions=system_prompt), room=ctx.room)
-    # say() speaks the fixed opener straight through TTS — no LLM roundtrip —
-    # so the coach's first words arrive noticeably faster than generate_reply.
-    await session.say(opener)
+    opener = build_opener(coach_ctx)
+    if config.profile.architecture == "cascade":
+        # Fixed opener bypasses the LLM in the cascade and reaches TTS faster.
+        await session.say(opener)
+    elif config.profile.provider != "google":
+        # Native models own speech generation, so ask for the same semantic
+        # opener through the realtime connection.
+        session.generate_reply(
+            instructions=f"Open this live call now. Say exactly this and nothing else: {opener}"
+        )
+    else:
+        # Gemini 3.1 Live explicitly ignores generate_reply and mid-session
+        # client-content updates. It starts in listening mode and answers the
+        # first user turn; pretending to send an opener creates a silent error.
+        await telemetry.publish(
+            "lifecycle", "opener",
+            {"status": "awaiting-user", "reason": "Gemini Live generate_reply limitation"},
+        )
 
 
 def _request_fnc(req: agents.JobRequest):
-    # Only serve rooms we minted (defensive, mirrors Jungle).
     if req.room and req.room.name and req.room.name.startswith("freewrite-"):
         return req.accept(name=AGENT_NAME)
     return req.reject()

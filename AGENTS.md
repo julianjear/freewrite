@@ -39,9 +39,12 @@ Freewrite is a **distraction-free writing environment** for macOS designed aroun
 - Local storage ensures privacy for personal video journals
 
 **Tertiary Use Case - AI-Assisted Reflection:**
-- "Chat" button sends writing to ChatGPT or Claude
-- Prompts designed to help users reflect on and understand their writing
-- AI provides feedback, questions, or analysis of stream-of-consciousness text
+- "Chat" opens a native right-side AI panel grounded in the note being viewed
+- Text chat streams responses and agent tool activity; "Call" starts the same
+  configurable voice experience available from the bottom-nav Voice button
+- Text chats and completed voice calls share a local conversation history
+- The agent can search the current note, search the live web, find public web
+  images, and read a specific public URL when those tools are relevant
 
 **Hidden Power Feature - Long-Form Writing:**
 - Despite minimalist interface, supports full markdown
@@ -117,6 +120,16 @@ struct HumanEntry: Identifiable {
   - `thumbnail.jpg`
   - `transcript.md` (optional; speech transcript for that recording)
 - Example directory: `~/Documents/Freewrite/Videos/[6910BBDE-75FC-415C-ABB9-C76644B037B2]-[2026-02-20-08-01-04]/`
+
+**AI Conversations**:
+- Text chat: `~/Documents/Freewrite/Conversations/[conversation-uuid].json`
+- Voice calls: `~/Documents/Freewrite/VoiceSessions/[entry-ref]/[session-id]/`
+- Text JSON includes messages, citations, image artifacts, tool activity, model,
+  token usage, latency, and estimated cost. Voice directories include transcript,
+  metadata, telemetry, and saved background-strategy briefs.
+- When a custom Freewrite folder is selected, new text and voice conversations
+  are written under that root. The history loader also reads the legacy default
+  VoiceSessions location so earlier calls remain visible.
 
 ## Key Components
 
@@ -236,7 +249,7 @@ struct VideoPlayerView: View {
 ### Right Side (Utilities)
 - **Timer**: Shows time remaining, click to start/stop, double-click to reset
 - **Video Camera (🎥)**: Opens immersive video recording overlay
-- **Chat**: Opens AI chat menu (ChatGPT/Claude integration)
+- **Chat**: Toggles the native note-aware AI side panel
 - **Backspace Toggle**: Enable/disable backspace key
 - **Fullscreen**: Toggle fullscreen mode
 - **New Entry**: Creates new text entry
@@ -667,6 +680,11 @@ TextEditor(text: Binding(
 
 **Why?** Creates visual breathing room at top of page. All entries look like they start mid-page, not cramped at the top edge.
 
+`MarkdownEditor` applies heading attributes as soon as a line matches `# `,
+`## `, or `### `, even before title text is entered. Keep the matcher tolerant of
+an empty heading body (`.*`, not `.+`) so the space keystroke updates the style
+immediately.
+
 ### Entry Creation Logic
 
 **Complex Decision Tree**:
@@ -755,27 +773,137 @@ Example: 18px font → target 27px line height → natural 21px → add 6px spac
 
 This creates **generous vertical rhythm** for readability during long writing sessions.
 
-### Chat Integration
+### Native AI Chat Panel
 
-**Prompts**:
-```swift
-let aiChatPrompt = "You are a writing coach. Help me understand what I wrote below and ask me questions about it:\n\n"
-let claudePrompt = "You are a thoughtful writing partner. Read what I wrote and help me explore the ideas further:\n\n"
-```
+`AIChatPanel` is a 610-point right-side panel inspired by Jungle's interaction
+contract, but adapted to Freewrite's local-first note model. Opening it starts a
+new note-aware conversation and immediately generates a private-prompted
+old-friend reflection (including a useful invitation for a blank note).
+`ContentView` supplies the selected note or video transcript on every turn.
+Switching entries selects the latest chat attached to that entry; New Chat
+starts and opens another thread without changing the note. The header expansion
+control lets the panel replace the editor at full window width and collapse back
+without changing conversation state.
 
-**URL Encoding**:
-```swift
-let fullText = aiChatPrompt + "\n\n" + trimmedText
-if let encodedText = fullText.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-   let url = URL(string: "https://chat.openai.com/?prompt=" + encodedText) {
-    NSWorkspace.shared.open(url)
-}
-```
+**Client layers:**
+- `AIChatManager`: selected conversation, automatic opening turn, batched
+  streaming reducer (120 ms UI cadence), persisted model/effort/observability
+  settings, error/cancel state, and typed tool/citation/image/usage events.
+- `AIChatClient`: authenticated POST SSE client for `/chat/stream`.
+- `AIConversationStore`: atomic local JSON persistence on a dedicated actor and
+  a unified history index over text conversations and saved voice sessions.
+- `AIChatPanel`: chat/history/voice-transcript surfaces, auto-growing composer
+  with in-box Call and Send controls, model menus, HTML responses, source/image
+  artifacts, usage hover breakdowns, and toggleable observability. Return sends.
+  Message views stay mounted in a non-lazy stack so WebKit state is not recycled.
+- `AIHTMLArtifactView`: one persistent, non-persistent-data, CSP-restricted
+  `WKWebView` per assistant artifact. During generation it renders sanitized
+  partial HTML through throttled DOM patches with model scripts disabled; when
+  complete it loads the final artifact once and enables inline interactions.
+  AppKit intrinsic sizing replaces SwiftUI height bindings, and wheel events
+  over WebKit are forwarded to the outer chat scroller so there is one vertical
+  scroll owner. It blocks network fetches, frames, forms, local navigation, and
+  non-user-initiated external-window requests. Because an artifact is embedded
+  in a conversation rather than owning a browser viewport, `min-height:100vh`
+  is normalized at the embed boundary to prevent expanded-panel whitespace.
 
-**Length Handling**:
-- URLs >6000 chars fail in some browsers
-- If too long, shows "Copy Prompt" button instead
-- Copies to clipboard for manual paste
+Opening or switching into a chat scrolls to its bottom so the composer handoff
+is visible. Submitting a user message then scrolls that message to the top of the
+chat viewport. Token arrival and response completion never force another scroll,
+so a reader's manual position is stable. The submit control sits immediately
+left of the Call control, which is always the composer's trailing action.
+
+After a new conversation's old-friend reflection completes, the manager starts
+a separate `questions` model turn. The Soul remains the fixed system layer and
+the dedicated reflection-question rubric is the most specific instruction. The
+Worker returns a strict six-question JSON envelope, not HTML. Questions, their
+opening-assistant-message anchor, and the second call's usage/cost are persisted
+on `AIConversation`. The distinct “Reflection questions to go deeper” card is
+rendered immediately after that anchored opening reflection, never as a floating
+footer after later replies. A pencil action appends the question to the current
+note as an H3, adds viewport-proportional trailing writing space, focuses the
+editor below the question, and scrolls the question near the top of the visible
+page. A call action carries that question into voice as the chosen starting
+point. The request includes the current note plus bounded snapshots of up to six
+recent Freewrite entries. It must never imply it read Obsidian notes unless such
+notes are actually supplied.
+
+When a voice session ends, local transcript persistence completes first and an
+idempotent `AIVoiceCallSummary` message is appended to the note's text
+conversation with the call duration. The optional Supabase transcript upload is
+best-effort background work and must not delay the ended phase or completed-call
+card. Voice call summary messages are display-only and are excluded from model
+history.
+
+**Worker loop:** `backend/voice-token-worker/src/chat.ts` verifies the Supabase
+ES256 JWT before work, rate-limits by verified user ID, validates and caps the
+request, then drives a bounded OpenAI Responses or Anthropic Messages tool loop.
+The event contract is `text-delta`, `text-reset`, `tool-start`, `tool-result`,
+`citation`, `usage`, `finish`, and `error`. At the tool-step cap it makes a final
+tool-free model call so a turn cannot end on an unanswered tool request. The
+Worker is stateless: recent chat history and latest note context are supplied
+each turn. OpenAI Responses use `store: false`; Anthropic replays the explicit
+history and handles `pause_turn` continuation with the same tool definitions.
+The chat loop permits at most three client-tool rounds and one tool per Anthropic
+response, and caps output at 7,000 tokens so pathological tool/reasoning loops
+cannot hold the panel indefinitely.
+
+Before transport, `AIChatRequestCompactor` keeps the latest note tail within a
+byte budget and converts prior assistant HTML artifacts back to visible text.
+This prevents CSS/JavaScript token waste and keeps long conversations under the
+Worker's 96 KB authenticated request limit without changing locally saved HTML.
+
+OpenAI replay is role-aware: user turns use `input_text`, while assistant turns
+use `output_text`. Using `input_text` for an assistant history item makes a
+follow-up Responses request fail inside the already-open SSE stream.
+
+The fixed Soul is the fundamental system layer. A hidden old-friend prompt is
+the immediate opening turn, and the HTML-artifact instruction is the exact end
+of every system prompt. Assistant responses are raw, self-contained HTML; never
+persist the hidden opening prompt as a visible user message. The Worker also
+enforces that contract after streaming: valid full artifacts pass through,
+fragments receive a document shell, and plain text receives a deterministic,
+escaped HTML artifact through `text-reset` before finish.
+
+**Tools:**
+- OpenAI or Anthropic hosted `web_search` for current/external facts and linked
+  citations. Anthropic uses basic `web_search_20250305`; newer dynamic-filtering
+  variants can invoke internal bash/text-editor helpers. Provider-internal tools
+  are never surfaced, persisted, or left running in product UI, and ordinary
+  journal/reflection follow-ups receive no tools at all. The Worker offers only
+  request-relevant tools, based on explicit web/current-fact, image, URL, or
+  current-note-search intent; an explicit “do not search” wins over keywords.
+- `search_current_note` for exact passages in long notes (local Worker search).
+- `image_search` for public reference images via Wikimedia Commons; results are
+  rendered as linked image cards in the panel.
+- `read_url` via Jina Reader for a specific public HTTP(S) page, with private/
+  localhost targets rejected, upstream timeouts, and bounded response reads.
+
+Tools return structured errors instead of throwing through the whole turn, and
+tool activity is visible only while observability is enabled.
+The default text model is GPT-5.6 Terra with low reasoning for latency. GPT-5.6
+Sol, Claude Sonnet 5, Claude Opus 4.8, Claude Fable 5, and provider-valid effort
+levels are selectable in the composer. Anthropic models require the Worker's
+optional `ANTHROPIC_API_KEY`; missing configuration returns HTTP 409 instead of
+silently changing models. Token and cost labels expose hover breakdowns for
+input/cache-write/cached/output/reasoning/search components. Costs are
+list-price estimates and must not be treated as billing truth.
+
+### Prompts
+
+The bottom-center `prompts` control opens a local prompt palette over the editor.
+Prompts can be one-time (removed after insertion) or recurring, can be renamed,
+deleted, and reordered within their section, and insert as an H2 at the current
+editor cursor. Insertions are recorded in searchable prompt history. Prompt data
+lives in `~/Library/Application Support/freewrite/prompts.json` and
+`prompt_history.json`; writing entries remain unchanged in
+`~/Documents/Freewrite/`.
+
+Command-P toggles the palette while Freewrite is active. The Carbon-based global
+Command-Shift-P hotkey activates the existing app window and focuses the add
+field. `EditorController` is the narrow bridge for insertion/focus; do not route
+cursor state through the SwiftUI text binding. The editor disables interaction
+while the palette is open so clicks do not leak through the overlay.
 
 ### PDF Export Implementation
 
@@ -977,15 +1105,66 @@ Check `~/Documents/Freewrite/` in Finder to verify files are being created.
 ## Voice Coach (AI voice conversations)
 
 A "Voice" button (bottom nav, next to Chat) starts a spoken AI-coaching call
-seeded with the current entry (text body, or a video entry's transcript).
+seeded with the current entry (text body, or a video entry's transcript). Voice
+setup and the active call now replace chat inside the same 610-point/full-width
+AI surface; they are not a separate sheet or window-filling overlay. Calls
+started from chat also receive a bounded visible-text replay of the text
+conversation. Calls started from a reflection-question card receive that
+question as the explicit opener and focus.
 
-**Architecture:** `freewrite/Voice/` (Swift, LiveKit SDK) → Cloudflare Worker
-`backend/voice-token-worker/` verifies the Supabase (Google-only, ES256/JWKS)
-session and mints a LiveKit JWT carrying the entry context in its `metadata`
-claim → LiveKit dispatches the Python agent `backend/voice-coach-agent/`
-(Deepgram STT → Gemini → ElevenLabs TTS; persona = SOUL doc in
-`coach/prompt.py`) → transcript saved locally under
-`~/Documents/Freewrite/VoiceSessions/` and to Supabase `voice_sessions` (RLS).
+**Architecture:** The Voice button opens a persisted pre-call Voice Lab. Its
+versioned `VoiceSessionConfiguration` flows through `VoiceTokenClient` → the
+Cloudflare Worker (Supabase ES256/JWKS + audience/role verification, schema
+validation, per-user rate limiting, opaque room name, microphone-only grant) →
+LiveKit metadata → the Python agent. Unknown profiles are rejected at both
+boundaries; never silently fall back during model comparisons.
+The Worker's non-secret `ENABLED_VOICE_PROVIDERS` and
+`ENABLED_STRATEGIST_PROVIDERS` must mirror keys on the active agent. It rejects
+unavailable selections with HTTP 409 before minting a room. The macOS client
+considers the coach ready only after an agent-state or lifecycle-ready signal,
+not merely when the transient RTC agent participant appears; configuration
+errors are published over telemetry before the failed job exits.
+
+Two architectures share the exact same prompt builder in `coach/prompt.py`:
+
+- **Cascade (default):** Deepgram Nova-3 → selected text LLM → ElevenLabs
+  `eleven_flash_v2_5`, with Silero VAD and LiveKit 1.6's acoustic + semantic
+  `TurnDetector`. Flux is an optional English A/B mode that owns EOT; it is not
+  default because its main value overlaps the new LiveKit detector.
+- **Native realtime:** GPT-Realtime 2.1/mini, Gemini 3.1 Flash Live Preview, or
+  Grok Voice owns audio input, reasoning, turn-taking, and audio output.
+
+The profile catalogs in Swift, TypeScript, and Python must keep identical IDs.
+Google and OpenAI profiles work with the current local secrets; Anthropic and
+xAI profiles require their corresponding agent environment keys.
+
+**Dual-model coaching:** `DeliberationCoordinator` asynchronously analyzes
+changed transcript turns every 15/20/30 seconds (30 by default) with a selected
+Gemini, Claude Sonnet 5, Claude Opus 4.8, or GPT-5.6 Sol model and selectable
+provider-valid thinking effort. It emits a concise structured `CoachingBrief`
+(not chain-of-thought), injects the full brief into the next response's system
+context for providers supporting dynamic instructions, and exposes the same
+brief through `get_coaching_brief`. The injection/fallback result is published
+with the brief for observability. Gemini 3.1 Live cannot reliably accept
+`generate_reply`, instructions, or chat-context updates after turn one, so it
+starts by listening and uses the tool-only strategist fallback.
+
+**Observability:** the agent publishes config, lifecycle, transcript, per-turn
+latency, sampled cumulative provider usage/cost estimates, errors, and briefs over the
+reliable `freewrite.voice.telemetry` data topic. `VoiceObservabilityPanel` is
+toggleable during a call. Session end writes `transcript.md`, `meta.json`,
+`events.json`, and `analyses.json` under
+`~/Documents/Freewrite/VoiceSessions/`, plus a migration-safe Supabase
+`voice_sessions` row under RLS. LiveKit Cloud remains the durable trace/audio
+recording surface. Costs are list-price estimates, not billing truth.
+
+**Voice canvas:** the default in-call view keeps visual artifacts separate from
+spoken prose, following Jungle's data-channel pattern. It shows the current
+question and relevant image artifacts; an eye toggle reveals/hides the full
+user/AI transcript. The agent's bounded `image_search` tool queries Wikimedia,
+publishes a selected image over reliable `freewrite.voice.artifact`, and emits
+its tool duration/status to normal observability. Chat image-search results are
+also available on handoff. The transcript remains plain spoken content.
 
 > **⚠️ NOT PROD-READY — the agent runs locally.** The coach agent is a local
 > process on Julian's Mac, kept alive by a launchd LaunchAgent
@@ -999,7 +1178,8 @@ claim → LiveKit dispatches the Python agent `backend/voice-coach-agent/`
 **Debugging:** filter app console on `[VoiceCoach]` (full lifecycle is logged).
 "Coach doesn't speak" → run the headless probe
 `backend/voice-coach-agent/tools/e2e_probe.py` — it joins like the app and
-measures the coach's actual TTS audio, isolating backend vs app issues.
+measures actual agent audio. Use `--profile` to choose a model and
+`--user-utterance` for listen-first Gemini Live.
 
 **Hard-won gotchas (do not regress):**
 - LiveKit's default AVAudioEngine audio module fails on this Mac
@@ -1010,8 +1190,18 @@ measures the coach's actual TTS audio, isolating backend vs app issues.
   ("Region manager error (No more remaining regions)").
 - Supabase auth session is stored in a FILE (`FileAuthLocalStorage`), not the
   keychain — ad-hoc dev signatures change every build, so keychain "Always
-  Allow" can never stick.
+  Allow" can never stick. Keep `emitLocalSessionAsInitialSession: true`, check
+  `Session.isExpired`, and re-open Google sign-in when `currentToken()` cannot
+  refresh; otherwise an expired disk session can produce misleading 401s.
 - The ElevenLabs plugin reads `ELEVEN_API_KEY` (not `ELEVENLABS_API_KEY`).
+- The token Worker is the model-routing boundary. App-side catalog changes do
+  nothing until the same ID exists in Worker + agent and the Worker is deployed.
+- `metrics_collected` is deprecated in LiveKit 1.6; use
+  `session_usage_updated` for cumulative usage/cost and `ChatMessage.metrics`
+  for per-turn latency.
+- LiveKit 1.6 turn controls belong under `turn_handling` (`turn_detection`,
+  `endpointing`, `interruption`, and `preemptive_generation`); the old flat
+  `AgentSession` options are deprecated and scheduled for removal in 2.0.
 - The `freewrite://` URL scheme (OAuth callback) is registered via the partial
   `freewrite/Info.plist` merged with `GENERATE_INFOPLIST_FILE` — don't remove
   either half.
@@ -1020,12 +1210,16 @@ measures the coach's actual TTS audio, isolating backend vs app issues.
 
 ## Summary
 
-Freewrite is a straightforward macOS writing app with video recording capabilities. All data is local, no backend required. The main complexity is in:
+Freewrite is a local-first macOS writing app with video journaling and optional
+authenticated AI text/voice services. Notes and conversation history remain
+plain local files; AI inference, web tools, and LiveKit voice require their
+backends. The main complexity is in:
 
 1. Proper file management and UUID-based naming
 2. Thread-safe array mutations for entries
 3. AVFoundation camera setup with proper configuration blocks
 4. Conditional rendering between text and video content
+5. Authenticated streaming text/voice sessions and durable local conversation history
 
 When making changes, always:
 - Test with actual video recording

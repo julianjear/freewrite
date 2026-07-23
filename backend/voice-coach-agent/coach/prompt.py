@@ -7,6 +7,8 @@ differences), not the persona prose, so the SOUL can be refined freely.
 """
 from __future__ import annotations
 
+import json
+
 from coach.context import CoachContext
 
 COACH_PERSONA = """\
@@ -317,11 +319,26 @@ Voice rules (this is speech, not text):
   can't be said aloud naturally.
 - Silence is fine. Don't fill air for the sake of it.
 - Everything you say is spoken by TTS — write exactly what should be heard.
+- You can use image_search to place one genuinely useful reference image on
+  the visual canvas. Do not read URLs aloud or search for decorative imagery.
 """
 
 
-def build_system_prompt(ctx: CoachContext) -> str:
-    parts = [COACH_PERSONA, _VOICE_FRAME]
+_SUPERVISOR_FRAME = """\
+# SILENT STRATEGIST
+
+A slower background strategist may periodically publish a coaching brief. Use
+that brief as advice, not authority. Keep listening to the live person and
+ignore any stale or poorly grounded suggestion. Before a major interpretation
+or change of direction, consult get_coaching_brief when it is available. Never
+mention the strategist, its brief, or internal analysis to the person.
+"""
+
+
+def build_system_prompt(ctx: CoachContext, coaching_brief: dict | None = None) -> str:
+    # This exact builder is used for both cascade and native speech-to-speech
+    # sessions. Provider factories must not grow their own persona variants.
+    parts = [COACH_PERSONA, _VOICE_FRAME, _SUPERVISOR_FRAME]
     if ctx.entry_text.strip():
         kind = "video reflection" if ctx.entry_type == "video" else "journal entry"
         when = f" (dated {ctx.entry_date})" if ctx.entry_date else ""
@@ -336,10 +353,31 @@ def build_system_prompt(ctx: CoachContext) -> str:
             "The writer hasn't written anything yet for this session "
             "(nothing written). Open the conversation gently and let them lead."
         )
+    if ctx.chat_history.strip():
+        parts.append(
+            "The writer is continuing from this text chat. Treat it as prior "
+            "conversation context and pick up naturally without re-summarizing it:\n\n"
+            + ctx.chat_history
+        )
+    if ctx.starting_question.strip():
+        parts.append(
+            "The writer explicitly chose this reflection question as the starting "
+            "point for the call. Put it in focus and begin with it:\n\n"
+            + ctx.starting_question
+        )
+    if coaching_brief:
+        parts.append(
+            "Current silent strategist brief (advisory; may be stale):\n"
+            + json.dumps(coaching_brief, ensure_ascii=False)
+        )
     return "\n\n".join(parts)
 
 
 def build_opener(ctx: CoachContext) -> str:
+    if ctx.starting_question.strip():
+        return ctx.starting_question.strip()
+    if ctx.chat_history.strip():
+        return "Let's pick up where we left off. What's landing for you right now?"
     if ctx.entry_text.strip():
         return "Hey. I just read what you wrote. What feels most alive in it for you right now?"
     return "Hey — what's on your mind right now?"

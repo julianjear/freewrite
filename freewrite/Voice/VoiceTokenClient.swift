@@ -6,28 +6,43 @@ struct VoiceSessionToken {
     let sessionId: String
 }
 
-enum VoiceTokenError: Error { case notAuthenticated, badResponse(Int), badURL }
+enum VoiceTokenError: Error {
+    case notAuthenticated
+    case badResponse(Int, String?)
+    case badURL
+}
 
 struct VoiceTokenClient {
-    // Deployed Cloudflare Worker (infinite@julian.ai account).
-    static let workerBaseURL = URL(string: "https://freewrite-voice-token.infinite-0b9.workers.dev")!
+    static var workerBaseURL: URL {
+        let environment = ProcessInfo.processInfo.environment["FREEWRITE_VOICE_TOKEN_URL"]
+        let defaults = UserDefaults.standard.string(forKey: "voiceTokenBaseURL")
+        return URL(string: environment ?? defaults ?? "https://freewrite-voice-token.infinite-0b9.workers.dev")!
+    }
 
-    func mint(context: VoiceContext, entryId: String?, accessToken: String?) async throws -> VoiceSessionToken {
+    func mint(context: VoiceContext, entryId: String?, configuration: VoiceSessionConfiguration,
+              accessToken: String?) async throws -> VoiceSessionToken {
         guard let accessToken else { throw VoiceTokenError.notAuthenticated }
         var req = URLRequest(url: Self.workerBaseURL.appendingPathComponent("voice/token"))
         req.httpMethod = "POST"
         req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        var body: [String: Any] = [
-            "context": try JSONSerialization.jsonObject(with: JSONEncoder().encode(context))
-        ]
-        if let entryId { body["entryId"] = entryId }
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        struct Body: Encodable {
+            let context: VoiceContext
+            let entryId: String?
+            let voiceConfig: VoiceSessionConfiguration
+        }
+        req.httpBody = try JSONEncoder().encode(
+            Body(context: context, entryId: entryId, voiceConfig: configuration)
+        )
 
         let (data, resp) = try await URLSession.shared.data(for: req)
         let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
-        guard status == 200 else { throw VoiceTokenError.badResponse(status) }
+        guard status == 200 else {
+            struct ErrorBody: Decodable { let error: String }
+            let message = try? JSONDecoder().decode(ErrorBody.self, from: data).error
+            throw VoiceTokenError.badResponse(status, message)
+        }
         struct R: Decodable { let token: String; let wsUrl: String; let sessionId: String }
         let r = try JSONDecoder().decode(R.self, from: data)
         guard let url = URL(string: r.wsUrl) else { throw VoiceTokenError.badURL }

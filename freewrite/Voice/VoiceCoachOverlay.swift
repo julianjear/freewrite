@@ -12,39 +12,65 @@ struct VoiceCoachOverlay: View {
     }
 
     var body: some View {
-        ZStack {
-            bg.ignoresSafeArea()
-            VStack(spacing: 0) {
-                Spacer()
-                Text(statusText)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundColor(isError ? Color.red.opacity(0.85) : fg.opacity(0.55))
-                    .padding(.bottom, 36)
-                    .animation(.easeInOut(duration: 0.2), value: statusText)
+        HStack(spacing: 0) {
+            ZStack(alignment: .topTrailing) {
+                bg.ignoresSafeArea()
+                VStack(spacing: 0) {
+                    Spacer()
+                    Text(statusText)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(isError ? Color.red.opacity(0.85) : fg.opacity(0.55))
+                        .padding(.bottom, 36)
+                        .animation(.easeInOut(duration: 0.2), value: statusText)
 
-                VoiceWaveform(level: waveLevel, isActive: isActive, color: fg.opacity(0.85))
-                    .frame(height: 72)
-                    .frame(maxWidth: 320)
-                    .padding(.horizontal, 40)
+                    VoiceWaveform(level: waveLevel, isActive: isActive, color: fg.opacity(0.85))
+                        .frame(height: 72)
+                        .frame(maxWidth: 320)
+                        .padding(.horizontal, 40)
 
-                Spacer()
+                    Spacer()
 
-                HStack(spacing: 28) {
-                    // Mute — secondary weight (outline only).
-                    circleButton(
-                        icon: manager.micMuted ? "mic.slash.fill" : "mic.fill",
-                        filled: false
-                    ) { Task { await manager.toggleMute() } }
+                    HStack(spacing: 28) {
+                        circleButton(
+                            icon: manager.micMuted ? "mic.slash.fill" : "mic.fill",
+                            filled: false,
+                            accessibilityLabel: manager.micMuted ? "Unmute microphone" : "Mute microphone"
+                        ) { Task { await manager.toggleMute() } }
 
-                    // End — primary weight (filled, larger). Ending is the deliberate action.
-                    circleButton(icon: "xmark", filled: true, diameter: 64) {
-                        Task { await manager.end(); onClose() }
+                        circleButton(icon: "xmark", filled: true, diameter: 64,
+                                     accessibilityLabel: "End voice call") {
+                            Task { await manager.end(); onClose() }
+                        }
                     }
+                    .padding(.bottom, 56)
                 }
-                .padding(.bottom, 56)
+                .padding()
+
+                if manager.activeConfiguration.observabilityEnabled {
+                    Button {
+                        manager.showsObservability.toggle()
+                    } label: {
+                        Label(manager.showsObservability ? "Hide console" : "Show console",
+                              systemImage: "waveform.path.ecg.rectangle")
+                            .font(.caption.weight(.medium))
+                            .padding(.horizontal, 11).padding(.vertical, 7)
+                            .background(fg.opacity(0.07), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(fg.opacity(0.72))
+                    .padding(18)
+                    .help("Toggle voice metrics, transcript, and strategist briefs")
+                }
             }
-            .padding()
+
+            if manager.showsObservability && manager.activeConfiguration.observabilityEnabled {
+                Divider()
+                VoiceObservabilityPanel(manager: manager)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
         }
+        .background(bg)
+        .animation(.easeInOut(duration: 0.2), value: manager.showsObservability)
         .onChange(of: manager.phase) { _, p in if case .ended = p { onClose() } }
     }
 
@@ -73,6 +99,7 @@ struct VoiceCoachOverlay: View {
 
     @ViewBuilder
     private func circleButton(icon: String, filled: Bool, diameter: CGFloat = 56,
+                              accessibilityLabel: String,
                               action: @escaping () -> Void) -> some View {
         Button(action: action) {
             ZStack {
@@ -89,6 +116,7 @@ struct VoiceCoachOverlay: View {
             .contentShape(Circle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
         .onHover { hovering in
             if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
         }

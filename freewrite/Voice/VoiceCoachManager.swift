@@ -2,8 +2,6 @@ import Foundation
 import AVFoundation
 @preconcurrency import LiveKit
 
-/// Unified, filterable logging for the voice feature. In Console.app or the
-/// Xcode console, filter on "[VoiceCoach]" to see the whole session lifecycle.
 @inline(__always) func vclog(_ message: String) {
     NSLog("[VoiceCoach] %@", message)
 }
@@ -15,43 +13,61 @@ final class VoiceCoachManager: ObservableObject {
         case error(String)
     }
 
+    struct TranscriptLine: Codable, Identifiable, Equatable {
+        let id: UUID
+        let speaker: String
+        let text: String
+        init(id: UUID = UUID(), speaker: String, text: String) {
+            self.id = id; self.speaker = speaker; self.text = text
+        }
+    }
+
     @Published var phase: Phase = .idle {
         didSet { VoiceCallSounds.shared.handleTransition(from: oldValue, to: phase) }
     }
     @Published var micMuted = false
-    @Published var micLevel: Float = 0     // drives the waveform
+    @Published var micLevel: Float = 0
     @Published private(set) var transcript: [TranscriptLine] = []
+    @Published private(set) var telemetryEvents: [VoiceTelemetryEvent] = []
+    @Published private(set) var canvasArtifacts: [VoiceCanvasArtifact] = []
+    @Published var showsObservability = false
+    @Published private(set) var durationSeconds = 0
+    @Published private(set) var activeConfiguration = VoiceSessionConfiguration()
+    @Published private(set) var lastCompletedCall: AIVoiceCallSummary?
 
-    struct TranscriptLine: Identifiable { let id = UUID(); let speaker: String; let text: String }
+    var totalEstimatedCost: Double {
+        telemetryEvents.totalVoiceEstimatedCostUSD
+    }
+
+    var estimatedCostHelp: String {
+        let usage = telemetryEvents.last(where: { $0.stage == "session-usage" })
+        var parts = [usage?.costBreakdownDescription, usage?.tokenBreakdownDescription]
+            .compactMap { $0 }
+        parts.append("Measured usage at public list prices. Provider discounts, credits, minimum billing increments, LiveKit transport/deployment, and later invoice adjustments are not included.")
+        return parts.joined(separator: "\n\n")
+    }
+
+    var elapsedDuration: String {
+        String(format: "%d:%02d", durationSeconds / 60, durationSeconds % 60)
+    }
 
     private var room: Room?
     private var levelTask: Task<Void, Never>?
     private var coachJoinTimeoutTask: Task<Void, Never>?
     private var coachJoined = false
+    private var isEnding = false
     private(set) var startedAt = Date()
-    private(set) var sessionId: String = ""
+    private(set) var sessionId = ""
     private var entryRef: String?
-    private var entryType: String = "text"
+    private var entryType = "text"
+    private var persistenceRoot = FileManager.default.urls(
+        for: .documentDirectory, in: .userDomainMask
+    )[0].appendingPathComponent("Freewrite", isDirectory: true)
+    private var recentTranscriptKeys: [String: Date] = [:]
 
-    /// How long we wait for the coach agent to join before surfacing an error
-    /// instead of sitting in "connecting" forever. The agent normally joins in
-    /// ~2s; 15s means it's not running or dispatch is misconfigured.
     private static let coachJoinTimeout: UInt64 = 15_000_000_000
-
-    // The agent picks the actual model; the client records the configured
-    // default (spec §5.4) for the saved session row.
-    private static let coachModel = "gemini-2.5-flash"
-
-    // One-time audio device module selection, done before any peer connection.
     nonisolated(unsafe) private static var admConfigured = false
 
-    /// Select WebRTC's native HAL-based audio device module on macOS instead of
-    /// the default AVAudioEngine ADM. The AVAudioEngine path fails on this Mac
-    /// with `AVAudioEngineGraph Start: kAUStartIO error 35` (it can't start the
-    /// audio unit — fights the system/other LiveKit apps over the device), which
-    /// blocks BOTH mic publish and agent playback. `.platformDefault` uses HAL
-    /// APIs directly and sidesteps AVAudioEngine entirely. MUST run before the
-    /// first Room is created. Idempotent + safe to call once per process.
     static func configureAudioDeviceModuleIfNeeded() {
         guard !admConfigured else { return }
         do {
@@ -63,45 +79,53 @@ final class VoiceCoachManager: ObservableObject {
         }
     }
 
-    func start(context: VoiceContext, entryId: String?) async {
-        // Must precede any Room()/peer-connection init.
+    func start(context: VoiceContext, entryId: String?, configuration: VoiceSessionConfiguration,
+               persistenceRoot: URL? = nil) async {
         VoiceCoachManager.configureAudioDeviceModuleIfNeeded()
-
-        vclog("start: entryType=\(context.entryType.rawValue) chars=\(context.entryText.count) truncated=\(context.truncated)")
-        phase = .authenticating
+        activeConfiguration = configuration
+        showsObservability = configuration.observabilityEnabled
         entryRef = entryId
         entryType = context.entryType.rawValue
+        if let persistenceRoot { self.persistenceRoot = persistenceRoot }
         coachJoined = false
+        micMuted = false
         transcript = []
+        recentTranscriptKeys = [:]
+        telemetryEvents = []
+        canvasArtifacts = []
+        durationSeconds = 0
+        lastCompletedCall = nil
+        sessionId = ""
+        isEnding = false
 
-        // Mic permission MUST be granted before LiveKit starts audio I/O;
-        // without it the audio unit fails and kills capture AND playback.
+        vclog("start profile=\(configuration.profileId) entryType=\(entryType) chars=\(context.entryText.count)")
+        phase = .authenticating
         guard await ensureMicPermission() else {
-            vclog("mic permission missing/denied")
             phase = .error("Microphone access is needed. Enable it in System Settings ▸ Privacy ▸ Microphone.")
             return
         }
 
         let auth = SupabaseAuth.shared
-        if !auth.isSignedIn {
-            vclog("not signed in — starting Google OAuth")
+        if await auth.currentToken() == nil {
             do { try await auth.signInWithGoogle() }
             catch {
                 vclog("sign-in failed: \(error)")
-                phase = .error("Sign-in failed"); return
+                phase = .error("Sign-in failed: \(error.localizedDescription)")
+                return
             }
         }
         phase = .connecting
 
-        // Token mint
         let token: VoiceSessionToken
         do {
-            token = try await VoiceTokenClient().mint(
-                context: context, entryId: entryId, accessToken: auth.currentToken())
-            vclog("token minted, session=\(token.sessionId)")
-        } catch let e as VoiceTokenError {
-            vclog("token mint failed: \(e)")
-            phase = .error(tokenErrorMessage(e)); return
+            token = try await mintToken(
+                context: context, entryId: entryId,
+                configuration: configuration, auth: auth
+            )
+            vclog("token minted session=\(token.sessionId)")
+        } catch let error as VoiceTokenError {
+            vclog("token mint failed: \(error)")
+            phase = .error(tokenErrorMessage(error)); return
         } catch {
             vclog("token mint failed: \(error)")
             phase = .error("Token error: \(error.localizedDescription)"); return
@@ -109,164 +133,223 @@ final class VoiceCoachManager: ObservableObject {
         sessionId = token.sessionId
         startedAt = Date()
 
-        // Room connect
         let room = Room()
         room.add(delegate: self)
         do {
-            try await room.connect(url: token.wsURL.absoluteString, token: token.token,
-                                   roomOptions: RoomOptions(adaptiveStream: true, dynacast: true))
-            vclog("room connected: \(token.sessionId)")
-        } catch {
-            vclog("room.connect FAILED: \(error)")
-            phase = .error("Connect failed: \(error.localizedDescription)"); return
-        }
-        self.room = room
-
-        // Mic publish — a failure here must NOT tear down the room (that's what
-        // made the agent see "room disconnected while waiting for participant").
-        do {
+            try await room.connect(
+                url: token.wsURL.absoluteString, token: token.token,
+                roomOptions: RoomOptions(adaptiveStream: true, dynacast: true)
+            )
+            self.room = room
             try await room.localParticipant.setMicrophone(enabled: true)
-            vclog("mic published")
+            vclog("room connected and mic published")
         } catch {
-            vclog("setMicrophone FAILED: \(error)")
-            phase = .error("Mic failed: \(error.localizedDescription)"); return
+            vclog("room/mic setup FAILED: \(error)")
+            await room.disconnect()
+            self.room = nil
+            phase = .error("Connect failed: \(error.localizedDescription)")
+            return
         }
 
         startLevelPolling(room)
-
-        // The coach may already be in the room (dispatch can beat our delegate
-        // registration) — check before arming the join timeout.
-        for (_, participant) in room.remoteParticipants {
-            if Self.isCoach(participant) {
-                vclog("coach already present: \(participant.identity?.stringValue ?? "?")")
-                markCoachJoined()
-                return
-            }
+        for (_, participant) in room.remoteParticipants where Self.isCoach(participant) {
+            vclog("coach participant present — awaiting backend ready event")
         }
 
-        // Stay in .connecting ("Connecting to your coach…") until the agent
-        // actually joins; error out with an actionable message if it never does.
-        vclog("waiting for coach to join (timeout \(Self.coachJoinTimeout / 1_000_000_000)s)…")
         coachJoinTimeoutTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: Self.coachJoinTimeout)
             guard let self, !Task.isCancelled else { return }
             if !self.coachJoined, self.phase == .connecting {
-                vclog("coach NEVER JOINED — agent not running or dispatch misconfigured")
-                self.phase = .error("The coach didn't join. Start the agent (backend/voice-coach-agent/run-agent.sh) and try again.")
+                self.phase = .error("The coach didn't join. Confirm the selected provider credentials and agent deployment, then try again.")
                 await self.room?.disconnect()
                 self.room = nil
             }
         }
     }
 
-    /// Agent participant present → session is live.
+    private func mintToken(context: VoiceContext, entryId: String?,
+                           configuration: VoiceSessionConfiguration,
+                           auth: SupabaseAuth) async throws -> VoiceSessionToken {
+        let client = VoiceTokenClient()
+        do {
+            return try await client.mint(
+                context: context, entryId: entryId, configuration: configuration,
+                accessToken: await auth.currentToken()
+            )
+        } catch VoiceTokenError.badResponse(401, _) {
+            // One bounded retry after asking Supabase to refresh the session.
+            await auth.restore()
+            return try await client.mint(
+                context: context, entryId: entryId, configuration: configuration,
+                accessToken: await auth.currentToken()
+            )
+        }
+    }
+
     private func markCoachJoined() {
         guard !coachJoined else { return }
         coachJoined = true
         coachJoinTimeoutTask?.cancel(); coachJoinTimeoutTask = nil
         if phase == .connecting { phase = .listening }
-        vclog("coach joined ✓ — session live")
+        vclog("coach joined — session live")
     }
 
-    /// A remote participant is the coach if LiveKit marks it as an agent (or,
-    /// belt-and-braces, its identity uses the server's agent- prefix).
-    nonisolated private static func isCoach(_ p: RemoteParticipant) -> Bool {
-        if p.kind == .agent { return true }
-        return p.identity?.stringValue.hasPrefix("agent") ?? false
+    nonisolated private static func isCoach(_ participant: RemoteParticipant) -> Bool {
+        participant.kind == .agent || (participant.identity?.stringValue.hasPrefix("agent") ?? false)
     }
 
     func toggleMute() async {
         guard let room else { return }
         micMuted.toggle()
-        vclog("mic muted=\(micMuted)")
-        try? await room.localParticipant.setMicrophone(enabled: !micMuted)
+        do { try await room.localParticipant.setMicrophone(enabled: !micMuted) }
+        catch { vclog("mute toggle failed: \(error)") }
     }
 
     func end() async {
-        vclog("end: session=\(sessionId) transcriptLines=\(transcript.count)")
+        guard !isEnding, phase != .idle, phase != .ended else { return }
+        isEnding = true
+        defer { isEnding = false }
+        vclog("end session=\(sessionId) transcriptLines=\(transcript.count) events=\(telemetryEvents.count)")
         coachJoinTimeoutTask?.cancel(); coachJoinTimeoutTask = nil
         levelTask?.cancel(); levelTask = nil
         await room?.disconnect()
         room = nil
+        if let completed = await persistSession() {
+            durationSeconds = completed.durationSeconds
+            lastCompletedCall = completed
+        }
         phase = .ended
-        await persistTranscript()
     }
 
-    /// Save the conversation locally and (best-effort) to Supabase on session end.
-    /// Skips when nothing was said or no session was established.
-    private func persistTranscript() async {
-        guard !sessionId.isEmpty, !transcript.isEmpty else {
-            vclog("persist: skipped (session empty)")
-            return
+    private func persistSession() async -> AIVoiceCallSummary? {
+        guard !sessionId.isEmpty else {
+            vclog("persist skipped: session empty")
+            return nil
         }
         let endedAt = Date()
         let lines = transcript
-
+        let events = telemetryEvents
+        let config = activeConfiguration
         VoiceTranscriptStore.saveLocal(
-            entryBase: entryRef ?? "transient",
-            sessionId: sessionId, lines: lines,
-            startedAt: startedAt, endedAt: endedAt)
-        vclog("persist: local transcript saved (\(lines.count) lines)")
+            rootDirectory: persistenceRoot,
+            entryBase: entryRef ?? "transient", sessionId: sessionId,
+            lines: lines, events: events, configuration: config,
+            startedAt: startedAt, endedAt: endedAt
+        )
+        vclog("persist local session saved")
 
-        if let userId = await SupabaseAuth.shared.currentUserId() {
-            await VoiceTranscriptStore.saveCloud(
-                client: SupabaseAuth.shared.supabase, userId: userId,
-                sessionId: sessionId, entryRef: entryRef, entryType: entryType,
-                lines: lines, startedAt: startedAt, endedAt: endedAt,
-                model: Self.coachModel)
-            vclog("persist: cloud row inserted")
+        let completed = AIVoiceCallSummary(
+            sessionId: sessionId,
+            entryId: entryRef,
+            startedAt: startedAt,
+            endedAt: endedAt,
+            durationSeconds: max(0, Int(endedAt.timeIntervalSince(startedAt)))
+        )
+
+        let sessionId = sessionId
+        let entryRef = entryRef
+        let entryType = entryType
+        let startedAt = startedAt
+        Task {
+            guard let userId = await SupabaseAuth.shared.currentUserId() else { return }
+            do {
+                try await VoiceTranscriptStore.saveCloud(
+                    client: SupabaseAuth.shared.supabase, userId: userId,
+                    sessionId: sessionId, entryRef: entryRef, entryType: entryType,
+                    lines: lines, events: events, configuration: config,
+                    startedAt: startedAt, endedAt: endedAt
+                )
+                vclog("persist cloud row inserted")
+            } catch {
+                vclog("persist cloud FAILED: \(error)")
+            }
         }
+        return completed
     }
 
     private func startLevelPolling(_ room: Room) {
         levelTask = Task { [weak self] in
             while !Task.isCancelled {
-                self?.micLevel = room.localParticipant.audioLevel
+                guard let self else { return }
+                self.micLevel = room.localParticipant.audioLevel
+                self.durationSeconds = max(0, Int(Date().timeIntervalSince(self.startedAt)))
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
         }
     }
 
-    /// Ensure microphone authorization before LiveKit touches the audio unit.
-    private func ensureMicPermission() async -> Bool {
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized:
-            return true
-        case .notDetermined:
-            return await AVCaptureDevice.requestAccess(for: .audio)
-        default:
-            return false   // denied / restricted
+    private func receiveTelemetry(_ data: Data) {
+        do {
+            let event = try JSONDecoder().decode(VoiceTelemetryEvent.self, from: data)
+            guard event.sessionId == sessionId else { return }
+            telemetryEvents.append(event)
+            if telemetryEvents.count > 400 { telemetryEvents.removeFirst(telemetryEvents.count - 400) }
+            if event.eventType == "lifecycle", event.stage == "session",
+               event.detail["status"]?.stringValue == "ready" {
+                markCoachJoined()
+            } else if event.eventType == "error", !coachJoined,
+                      let message = event.detail["message"]?.stringValue {
+                vclog("backend startup FAILED: \(message)")
+                phase = .error("Coach configuration error: \(message)")
+            }
+        } catch {
+            vclog("telemetry decode failed: \(error)")
         }
     }
 
-    private func tokenErrorMessage(_ e: VoiceTokenError) -> String {
-        switch e {
+    private func receiveArtifact(_ data: Data) {
+        do {
+            let artifact = try JSONDecoder().decode(VoiceCanvasArtifact.self, from: data)
+            guard artifact.sessionId == sessionId,
+                  !canvasArtifacts.contains(where: { $0.id == artifact.id }) else { return }
+            canvasArtifacts.append(artifact)
+            if canvasArtifacts.count > 50 {
+                canvasArtifacts.removeFirst(canvasArtifacts.count - 50)
+            }
+        } catch {
+            vclog("artifact decode failed: \(error)")
+        }
+    }
+
+    private func appendTranscript(speaker: String, text: String) {
+        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        let key = "\(speaker)|\(clean)"
+        let now = Date()
+        recentTranscriptKeys = recentTranscriptKeys.filter { now.timeIntervalSince($0.value) < 3 }
+        guard recentTranscriptKeys[key] == nil else { return }
+        recentTranscriptKeys[key] = now
+        transcript.append(.init(speaker: speaker, text: clean))
+    }
+
+    private func ensureMicPermission() async -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: return true
+        case .notDetermined: return await AVCaptureDevice.requestAccess(for: .audio)
+        default: return false
+        }
+    }
+
+    private func tokenErrorMessage(_ error: VoiceTokenError) -> String {
+        switch error {
         case .notAuthenticated: return "Please sign in to use the coach"
-        case .badResponse(let s): return "Couldn't start the coach (\(s))"
+        case .badResponse(let status, let message):
+            return message.map { "Couldn't start the coach (\(status)): \($0)" }
+                ?? "Couldn't start the coach (\(status))"
         case .badURL: return "Server returned a bad address"
         }
     }
 }
 
-// Signatures below match RoomDelegate exactly (verified against client-sdk-swift
-// RoomDelegate.swift lines 42/98/102/129/133/158). They must match exactly or
-// Swift treats them as unrelated methods that silently never fire (delegate
-// methods have default empty implementations — no compile error, just dead
-// callbacks).
 extension VoiceCoachManager: RoomDelegate {
     nonisolated func room(_ room: Room, participantDidConnect participant: RemoteParticipant) {
-        let identity = participant.identity?.stringValue ?? "?"
-        vclog("participant joined: \(identity) kind=\(participant.kind)")
         guard Self.isCoach(participant) else { return }
-        Task { @MainActor in self.markCoachJoined() }
+        vclog("coach participant joined — awaiting backend ready event")
     }
 
     nonisolated func room(_ room: Room, participantDidDisconnect participant: RemoteParticipant) {
-        let identity = participant.identity?.stringValue ?? "?"
-        vclog("participant left: \(identity)")
         guard Self.isCoach(participant) else { return }
         Task { @MainActor in
-            // Coach dropping mid-conversation is an error state, not "listening".
             if self.phase == .listening || self.phase == .speaking {
                 self.phase = .error("The coach disconnected. Try again.")
             }
@@ -275,16 +358,16 @@ extension VoiceCoachManager: RoomDelegate {
 
     nonisolated func room(_ room: Room, participant: RemoteParticipant,
                           didSubscribeTrack publication: RemoteTrackPublication) {
-        vclog("subscribed to \(publication.kind) track from \(participant.identity?.stringValue ?? "?")")
+        vclog("subscribed to \(publication.kind) track")
     }
 
-    // Agent speaking/listening from the lk.agent.state participant attribute.
     nonisolated func room(_ room: Room, participant: Participant,
                           didUpdateAttributes attributes: [String: String]) {
         guard let state = attributes["lk.agent.state"] else { return }
-        vclog("lk.agent.state -> \(state)")
         Task { @MainActor in
-            self.markCoachJoined()   // publishing agent state proves the coach is here
+            // A real agent state is emitted only after AgentSession startup,
+            // so it is a readiness signal; participant presence alone is not.
+            self.markCoachJoined()
             switch state {
             case "speaking": self.phase = .speaking
             case "listening", "thinking": if self.phase != .ended { self.phase = .listening }
@@ -293,16 +376,23 @@ extension VoiceCoachManager: RoomDelegate {
         }
     }
 
-    // Live transcription stream (lk.transcription) — note the trackPublication arg.
     nonisolated func room(_ room: Room, participant: Participant,
                           trackPublication: TrackPublication,
                           didReceiveTranscriptionSegments segments: [TranscriptionSegment]) {
-        let isAgent = participant is RemoteParticipant
+        let speaker = participant is RemoteParticipant ? "Coach" : "You"
         Task { @MainActor in
-            for seg in segments where seg.isFinal {
-                vclog("transcript[\(isAgent ? "coach" : "you")]: \(seg.text.prefix(80))")
-                self.transcript.append(.init(speaker: isAgent ? "Coach" : "You", text: seg.text))
+            for segment in segments where segment.isFinal {
+                self.appendTranscript(speaker: speaker, text: segment.text)
             }
+        }
+    }
+
+    nonisolated func room(_ room: Room, participant: RemoteParticipant?, didReceiveData data: Data,
+                          forTopic topic: String, encryptionType: EncryptionType) {
+        if topic == "freewrite.voice.telemetry" {
+            Task { @MainActor in self.receiveTelemetry(data) }
+        } else if topic == "freewrite.voice.artifact" {
+            Task { @MainActor in self.receiveArtifact(data) }
         }
     }
 }

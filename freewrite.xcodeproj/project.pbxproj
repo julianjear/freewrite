@@ -36,9 +36,22 @@
 		2857D48B2D5F8A8100EE1012 /* freewriteUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = freewriteUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		5A11C8E62F30D8A800C0D3E4 /* Exceptions for "freewrite" folder in "freewrite" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 2857D46F2D5F8A8000EE1012 /* freewrite */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		2857D4722D5F8A8000EE1012 /* freewrite */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				5A11C8E62F30D8A800C0D3E4 /* Exceptions for "freewrite" folder in "freewrite" target */,
+			);
 			path = freewrite;
 			sourceTree = "<group>";
 		};

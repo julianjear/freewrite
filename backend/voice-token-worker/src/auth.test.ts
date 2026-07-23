@@ -13,13 +13,14 @@ async function es256() {
 
 async function makeToken(
   privateKey: CryptoKey,
-  opts: { sub?: string; expOffset?: number; issuer?: string },
+  opts: { sub?: string; expOffset?: number; issuer?: string; audience?: string; role?: string },
 ) {
   const now = Math.floor(Date.now() / 1000);
-  return await new SignJWT({ role: "authenticated", email: "a@b.com" })
+  return await new SignJWT({ role: opts.role ?? "authenticated", email: "a@b.com" })
     .setProtectedHeader({ alg: "ES256" })
     .setSubject(opts.sub ?? "user-abc")
     .setIssuer(opts.issuer ?? ISSUER)
+    .setAudience(opts.audience ?? "authenticated")
     .setIssuedAt(now)
     .setExpirationTime(now + (opts.expOffset ?? 3600))
     .sign(privateKey);
@@ -29,7 +30,7 @@ describe("verifySupabaseJWT (ES256)", () => {
   it("returns userId + email for a valid token", async () => {
     const { publicKey, privateKey } = await es256();
     const token = await makeToken(privateKey, {});
-    const r = await verifySupabaseJWT(token, publicKey, { issuer: ISSUER });
+    const r = await verifySupabaseJWT(token, publicKey, { issuer: ISSUER, audience: "authenticated" });
     expect(r.userId).toBe("user-abc");
     expect(r.email).toBe("a@b.com");
   });
@@ -38,7 +39,7 @@ describe("verifySupabaseJWT (ES256)", () => {
     const { publicKey, privateKey } = await es256();
     const token = await makeToken(privateKey, { expOffset: -10 });
     await expect(
-      verifySupabaseJWT(token, publicKey, { issuer: ISSUER }),
+      verifySupabaseJWT(token, publicKey, { issuer: ISSUER, audience: "authenticated" }),
     ).rejects.toThrow();
   });
 
@@ -47,7 +48,7 @@ describe("verifySupabaseJWT (ES256)", () => {
     const other = await es256();
     const token = await makeToken(signer.privateKey, {});
     await expect(
-      verifySupabaseJWT(token, other.publicKey, { issuer: ISSUER }),
+      verifySupabaseJWT(token, other.publicKey, { issuer: ISSUER, audience: "authenticated" }),
     ).rejects.toThrow();
   });
 
@@ -57,7 +58,19 @@ describe("verifySupabaseJWT (ES256)", () => {
       issuer: "https://evil.supabase.co/auth/v1",
     });
     await expect(
-      verifySupabaseJWT(token, publicKey, { issuer: ISSUER }),
+      verifySupabaseJWT(token, publicKey, { issuer: ISSUER, audience: "authenticated" }),
     ).rejects.toThrow();
+  });
+
+  it("throws on audience mismatch or non-authenticated role", async () => {
+    const { publicKey, privateKey } = await es256();
+    await expect(verifySupabaseJWT(
+      await makeToken(privateKey, { audience: "other" }), publicKey,
+      { issuer: ISSUER, audience: "authenticated" },
+    )).rejects.toThrow();
+    await expect(verifySupabaseJWT(
+      await makeToken(privateKey, { role: "anon" }), publicKey,
+      { issuer: ISSUER, audience: "authenticated" },
+    )).rejects.toThrow();
   });
 });

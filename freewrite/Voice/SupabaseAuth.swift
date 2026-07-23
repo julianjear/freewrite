@@ -44,7 +44,10 @@ final class SupabaseAuth: ObservableObject {
         supabaseURL: URL(string: "https://glzxxdwlsttayuoajycq.supabase.co")!,
         supabaseKey: "sb_publishable_UmMcVy-1CFwG-AT6kyzRyw_hq89U1Ie",
         options: SupabaseClientOptions(
-            auth: SupabaseClientOptions.AuthOptions(storage: FileAuthLocalStorage())
+            auth: SupabaseClientOptions.AuthOptions(
+                storage: FileAuthLocalStorage(),
+                emitLocalSessionAsInitialSession: true
+            )
         )
     )
 
@@ -58,9 +61,18 @@ final class SupabaseAuth: ObservableObject {
     var supabase: SupabaseClient { client }
 
     func restore() async {
-        if let session = try? await client.auth.session {
+        do {
+            let session = try await client.auth.session
+            guard !session.isExpired else {
+                accessToken = nil
+                isSignedIn = false
+                return
+            }
             accessToken = session.accessToken
             isSignedIn = true
+        } catch {
+            accessToken = nil
+            isSignedIn = false
         }
     }
 
@@ -99,7 +111,26 @@ final class SupabaseAuth: ObservableObject {
         }
     }
 
-    func currentToken() -> String? { accessToken }
+    /// Always ask Supabase for the current session. The SDK refreshes expired
+    /// access tokens; returning the launch-time cached token caused avoidable
+    /// 401s in long-running app sessions.
+    func currentToken() async -> String? {
+        do {
+            let session = try await client.auth.session
+            guard !session.isExpired else {
+                accessToken = nil
+                isSignedIn = false
+                return nil
+            }
+            accessToken = session.accessToken
+            isSignedIn = true
+            return session.accessToken
+        } catch {
+            accessToken = nil
+            isSignedIn = false
+            return nil
+        }
+    }
     func currentUserId() async -> String? {
         (try? await client.auth.session)?.user.id.uuidString
     }
