@@ -29,6 +29,8 @@ def test_parse_missing_or_bad_metadata_returns_empty():
     assert parse_context(None).entry_text == ""
     assert parse_context("{not json").entry_text == ""
     assert parse_context("{}").entry_type == "text"
+    assert parse_context("[]").entry_text == ""
+    assert parse_context('{"context":"not-an-object"}').entry_text == ""
 
 
 def test_cap_entry_text_keeps_tail():

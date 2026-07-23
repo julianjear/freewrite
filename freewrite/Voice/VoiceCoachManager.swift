@@ -160,9 +160,10 @@ final class VoiceCoachManager: ObservableObject {
             try? await Task.sleep(nanoseconds: Self.coachJoinTimeout)
             guard let self, !Task.isCancelled else { return }
             if !self.coachJoined, self.phase == .connecting {
-                self.phase = .error("The coach didn't join. Confirm the selected provider credentials and agent deployment, then try again.")
-                await self.room?.disconnect()
-                self.room = nil
+                self.coachJoinTimeoutTask = nil
+                await self.failActiveCall(
+                    "The coach didn't join. Confirm the selected provider credentials and agent deployment, then try again."
+                )
             }
         }
     }
@@ -278,17 +279,15 @@ final class VoiceCoachManager: ObservableObject {
         }
     }
 
-    private func receiveTelemetry(_ data: Data) {
+    private func receiveTelemetry(_ data: Data) async {
         do {
             let event = try JSONDecoder().decode(VoiceTelemetryEvent.self, from: data)
             guard event.sessionId == sessionId else { return }
             telemetryEvents.append(event)
             if telemetryEvents.count > 400 { telemetryEvents.removeFirst(telemetryEvents.count - 400) }
-            if let message = event.userFacingErrorMessage {
+            if let message = event.fatalErrorMessage {
                 vclog("backend FAILED: \(message)")
-                coachJoinTimeoutTask?.cancel()
-                coachJoinTimeoutTask = nil
-                phase = .error(message)
+                await failActiveCall(message)
             } else if event.eventType == "lifecycle", event.stage == "session",
                event.detail["status"]?.stringValue == "ready" {
                 markCoachJoined()
@@ -296,6 +295,20 @@ final class VoiceCoachManager: ObservableObject {
         } catch {
             vclog("telemetry decode failed: \(error)")
         }
+    }
+
+    private func failActiveCall(_ message: String) async {
+        guard phase != .ended, !isEnding else { return }
+        coachJoinTimeoutTask?.cancel()
+        coachJoinTimeoutTask = nil
+        levelTask?.cancel()
+        levelTask = nil
+        micLevel = 0
+
+        let failedRoom = room
+        room = nil
+        phase = .error(message)
+        await failedRoom?.disconnect()
     }
 
     private func receiveArtifact(_ data: Data) {
@@ -401,7 +414,7 @@ extension VoiceCoachManager: RoomDelegate {
     nonisolated func room(_ room: Room, participant: RemoteParticipant?, didReceiveData data: Data,
                           forTopic topic: String, encryptionType: EncryptionType) {
         if topic == "freewrite.voice.telemetry" {
-            Task { @MainActor in self.receiveTelemetry(data) }
+            Task { @MainActor in await self.receiveTelemetry(data) }
         } else if topic == "freewrite.voice.artifact" {
             Task { @MainActor in self.receiveArtifact(data) }
         }

@@ -40,7 +40,11 @@ def parse_context(metadata: str | None) -> CoachContext:
         meta = json.loads(metadata)
     except (json.JSONDecodeError, TypeError):
         return CoachContext()
+    if not isinstance(meta, dict):
+        return CoachContext()
     ctx = meta.get("context") or {}
+    if not isinstance(ctx, dict):
+        return CoachContext()
     text, truncated = cap_entry_text(str(ctx.get("entryText") or ""))
     chat_history = str(ctx.get("chatHistory") or "")[-MAX_CHAT_CHARS:]
     starting_question = str(ctx.get("startingQuestion") or "")[:MAX_QUESTION_CHARS]

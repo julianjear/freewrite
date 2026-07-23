@@ -6,6 +6,7 @@ instead of silently running a different (and misleading) benchmark.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
@@ -168,3 +169,25 @@ def parse_voice_config(value: Any) -> VoiceSessionConfig:
         observability_enabled=value.get("observabilityEnabled", True) is True,
         turn_strategy=turn_strategy,
     )
+
+
+def parse_metadata_config(metadata: str | None) -> VoiceSessionConfig:
+    """Read the versioned voice config from LiveKit participant metadata.
+
+    Missing or non-JSON metadata remains backwards compatible with the default
+    profile. Structurally valid JSON is authoritative, so malformed config
+    values raise a clear error instead of silently selecting another model.
+    """
+    if not metadata:
+        return VoiceSessionConfig()
+    try:
+        value = json.loads(metadata)
+    except (TypeError, json.JSONDecodeError):
+        return VoiceSessionConfig()
+    if not isinstance(value, dict):
+        raise ValueError("participant metadata must be a JSON object")
+
+    voice_config = value.get("voiceConfig")
+    if voice_config is not None and not isinstance(voice_config, dict):
+        raise ValueError("voiceConfig must be a JSON object")
+    return parse_voice_config(voice_config)

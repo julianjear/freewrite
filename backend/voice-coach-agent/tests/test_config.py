@@ -1,6 +1,11 @@
 import pytest
 
-from coach.config import DEFAULT_PROFILE_ID, PROFILES, parse_voice_config
+from coach.config import (
+    DEFAULT_PROFILE_ID,
+    PROFILES,
+    parse_metadata_config,
+    parse_voice_config,
+)
 
 
 def test_default_config_is_versioned_production_cascade():
@@ -68,3 +73,19 @@ def test_accepts_deep_strategists_and_max_effort(model):
 def test_rejects_effort_not_supported_by_gemini():
     with pytest.raises(ValueError):
         parse_voice_config({"supervisorModel": "gemini-3.5-flash", "supervisorEffort": "xhigh"})
+
+
+def test_metadata_rejects_valid_json_with_invalid_voice_config():
+    with pytest.raises(ValueError, match="unsupported voice profile"):
+        parse_metadata_config('{"voiceConfig":{"profileId":"made-up-model"}}')
+
+
+@pytest.mark.parametrize("metadata", ["[]", '{"voiceConfig":"not-an-object"}'])
+def test_metadata_rejects_structurally_invalid_config(metadata):
+    with pytest.raises(ValueError):
+        parse_metadata_config(metadata)
+
+
+def test_metadata_without_voice_config_uses_default():
+    config = parse_metadata_config('{"entryType":"text"}')
+    assert config.profile_id == DEFAULT_PROFILE_ID

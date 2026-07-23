@@ -1193,6 +1193,15 @@ measures actual agent audio. Use `--profile` to choose a model and
   Allow" can never stick. Keep `emitLocalSessionAsInitialSession: true`, check
   `Session.isExpired`, and re-open Google sign-in when `currentToken()` cannot
   refresh; otherwise an expired disk session can produce misleading 401s.
+  Concurrent sign-in callers must share `OAuthSignInCoordinator`; replacing a
+  pending callback continuation strands the earlier caller.
+- Fatal coach configuration and non-recoverable agent-session telemetry errors
+  must cancel level polling and disconnect the LiveKit room so a failed call
+  cannot leave the microphone published. Supervisor and recoverable provider
+  errors remain visible in observability without ending an otherwise live call.
+- LiveKit participant metadata with an explicit invalid `voiceConfig` must
+  publish a configuration error and stop. Never silently benchmark a fallback
+  model when the selected profile or controls are invalid.
 - The ElevenLabs plugin reads `ELEVEN_API_KEY` (not `ELEVENLABS_API_KEY`).
 - The token Worker is the model-routing boundary. App-side catalog changes do
   nothing until the same ID exists in Worker + agent and the Worker is deployed.

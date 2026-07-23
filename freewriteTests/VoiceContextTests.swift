@@ -59,9 +59,59 @@ final class VoiceContextTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            event.userFacingErrorMessage,
+            event.fatalErrorMessage,
             "Coach configuration error: Missing provider key"
         )
+    }
+
+    func testRecoverableAndSupervisorErrorsStayObservableWithoutEndingTheCall() {
+        let recoverableSessionError = VoiceTelemetryEvent(
+            version: 1,
+            id: "event-2",
+            sequence: 2,
+            sessionId: "session-1",
+            eventType: "error",
+            stage: "agent-session",
+            timestamp: "2026-07-23T20:00:01Z",
+            monotonicSeconds: 2,
+            detail: [
+                "message": .string("Provider retrying"),
+                "recoverable": .bool(true),
+            ]
+        )
+        let supervisorError = VoiceTelemetryEvent(
+            version: 1,
+            id: "event-3",
+            sequence: 3,
+            sessionId: "session-1",
+            eventType: "error",
+            stage: "supervisor",
+            timestamp: "2026-07-23T20:00:02Z",
+            monotonicSeconds: 3,
+            detail: ["message": .string("Strategist unavailable")]
+        )
+
+        XCTAssertNil(recoverableSessionError.fatalErrorMessage)
+        XCTAssertNil(supervisorError.fatalErrorMessage)
+    }
+
+    func testNonrecoverableAgentErrorEndsTheCall() {
+        let event = VoiceTelemetryEvent(
+            version: 1,
+            id: "event-4",
+            sequence: 4,
+            sessionId: "session-1",
+            eventType: "error",
+            stage: "agent-session",
+            timestamp: "2026-07-23T20:00:03Z",
+            monotonicSeconds: 4,
+            detail: [
+                "message": .string("Realtime model stopped"),
+                "recoverable": .bool(false),
+            ]
+        )
+
+        XCTAssertEqual(event.fatalErrorMessage, "Coach error: Realtime model stopped")
     }
 
     @MainActor

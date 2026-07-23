@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 
@@ -11,7 +10,7 @@ from livekit import agents
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions
 from livekit.agents.llm import ChatMessage
 
-from coach.config import VoiceSessionConfig, parse_voice_config
+from coach.config import VoiceSessionConfig, parse_metadata_config
 from coach.artifacts import VoiceArtifactPublisher
 from coach.context import parse_context
 from coach.deliberation import DeliberationCoordinator, create_brief_analyzer
@@ -25,22 +24,30 @@ logger = logging.getLogger("freewrite-coach")
 AGENT_NAME = os.environ.get("COACH_AGENT_NAME", "freewrite-coach")
 
 
-def _metadata_config(metadata: str | None) -> VoiceSessionConfig:
-    if not metadata:
-        return VoiceSessionConfig()
-    try:
-        value = json.loads(metadata)
-    except (TypeError, json.JSONDecodeError):
-        return VoiceSessionConfig()
-    return parse_voice_config(value.get("voiceConfig"))
-
-
 async def entrypoint(ctx: JobContext) -> None:
     await ctx.connect()
     participant = await ctx.wait_for_participant()
 
+    try:
+        config = parse_metadata_config(participant.metadata)
+    except (TypeError, ValueError) as exc:
+        config = VoiceSessionConfig()
+        telemetry = TelemetryPublisher(ctx.room, ctx.room.name, config)
+        logger.exception("invalid voice configuration")
+        await telemetry.publish(
+            "error",
+            "configuration",
+            {
+                "message": str(exc),
+                "profileId": config.profile_id,
+                "supervisorModel": config.supervisor_model,
+            },
+        )
+        # Keep the participant alive briefly so the reliable packet can reach
+        # the app before this failed job tears down.
+        await asyncio.sleep(0.25)
+        raise
     coach_ctx = parse_context(participant.metadata)
-    config = _metadata_config(participant.metadata)
     system_prompt = build_system_prompt(coach_ctx)
     telemetry = TelemetryPublisher(ctx.room, ctx.room.name, config)
 
@@ -120,7 +127,11 @@ async def entrypoint(ctx: JobContext) -> None:
         asyncio.create_task(
             telemetry.publish(
                 "error", "agent-session",
-                {"message": str(event.error), "source": type(event.source).__name__},
+                {
+                    "message": str(event.error),
+                    "source": type(event.source).__name__,
+                    "recoverable": bool(getattr(event.error, "recoverable", False)),
+                },
             )
         )
 

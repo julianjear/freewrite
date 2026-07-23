@@ -52,6 +52,7 @@ enum VoiceJSONValue: Codable, Equatable {
     }
 
     var doubleValue: Double? { if case .number(let value) = self { return value }; return nil }
+    var boolValue: Bool? { if case .bool(let value) = self { return value }; return nil }
 }
 
 struct VoiceTelemetryEvent: Codable, Identifiable, Equatable {
@@ -67,12 +68,17 @@ struct VoiceTelemetryEvent: Codable, Identifiable, Equatable {
 
     var estimatedCostUSD: Double? { detail["estimatedCostUSD"]?.doubleValue }
     var isCumulativeCost: Bool { detail["costKind"]?.stringValue == "cumulative" }
-    var userFacingErrorMessage: String? {
+    var fatalErrorMessage: String? {
         guard eventType == "error", let message = detail["message"]?.stringValue else {
             return nil
         }
-        let label = stage == "configuration" ? "Coach configuration error" : "Coach error"
-        return "\(label): \(message)"
+        if stage == "configuration" {
+            return "Coach configuration error: \(message)"
+        }
+        if stage == "agent-session", detail["recoverable"]?.boolValue != true {
+            return "Coach error: \(message)"
+        }
+        return nil
     }
 
     var tokenBreakdownDescription: String? {
