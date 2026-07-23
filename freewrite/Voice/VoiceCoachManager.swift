@@ -60,6 +60,7 @@ final class VoiceCoachManager: ObservableObject {
     private(set) var sessionId = ""
     private var entryRef: String?
     private var entryType = "text"
+    private var entryDate = ""
     private var persistenceRoot = FileManager.default.urls(
         for: .documentDirectory, in: .userDomainMask
     )[0].appendingPathComponent("Freewrite", isDirectory: true)
@@ -86,6 +87,7 @@ final class VoiceCoachManager: ObservableObject {
         showsObservability = configuration.observabilityEnabled
         entryRef = entryId
         entryType = context.entryType.rawValue
+        entryDate = context.entryDate
         if let persistenceRoot { self.persistenceRoot = persistenceRoot }
         coachJoined = false
         micMuted = false
@@ -244,7 +246,9 @@ final class VoiceCoachManager: ObservableObject {
             entryId: entryRef,
             startedAt: startedAt,
             endedAt: endedAt,
-            durationSeconds: max(0, Int(endedAt.timeIntervalSince(startedAt)))
+            durationSeconds: max(0, Int(endedAt.timeIntervalSince(startedAt))),
+            entryType: entryType,
+            entryDate: entryDate
         )
 
         let sessionId = sessionId

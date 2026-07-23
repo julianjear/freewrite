@@ -830,10 +830,12 @@ notes are actually supplied.
 
 When a voice session ends, local transcript persistence completes first and an
 idempotent `AIVoiceCallSummary` message is appended to the note's text
-conversation with the call duration. The optional Supabase transcript upload is
-best-effort background work and must not delay the ended phase or completed-call
-card. Voice call summary messages are display-only and are excluded from model
-history.
+conversation with the call duration. The summary retains entry type/date from
+call start, persists to that originating entry, and updates the visible thread
+only if the editor is still on the same entry. The optional Supabase transcript
+upload is best-effort background work and must not delay the ended phase or
+completed-call card. Voice call summary messages are display-only and are
+excluded from model history.
 
 **Worker loop:** `backend/voice-token-worker/src/chat.ts` verifies the Supabase
 ES256 JWT before work, rate-limits by verified user ID, validates and caps the

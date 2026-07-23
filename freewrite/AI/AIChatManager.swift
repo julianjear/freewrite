@@ -349,18 +349,21 @@ final class AIChatManager: ObservableObject {
     func recordVoiceCall(_ call: AIVoiceCallSummary, context: AIChatContext,
                          store: AIConversationStore) {
         let targetEntryID = call.entryId ?? context.entryId
+        let isVisibleEntry = context.entryId == targetEntryID
         var conversation: AIConversation
         if let currentConversation, currentConversation.entryId == targetEntryID {
             conversation = currentConversation
         } else if let existing = store.latestConversation(entryId: targetEntryID) {
             conversation = existing
         } else {
+            let entryType = isVisibleEntry ? context.entryType : (call.entryType ?? "text")
+            let entryDate = isVisibleEntry ? context.entryDate : (call.entryDate ?? "")
             conversation = AIConversation(
                 entryId: targetEntryID,
-                entryType: context.entryType,
-                entryDate: context.entryDate,
-                title: context.entryDate.isEmpty
-                    ? "Voice conversation" : "Voice conversation · \(context.entryDate)"
+                entryType: entryType,
+                entryDate: entryDate,
+                title: entryDate.isEmpty
+                    ? "Voice conversation" : "Voice conversation · \(entryDate)"
             )
         }
         guard !conversation.messages.contains(where: {
@@ -373,9 +376,11 @@ final class AIChatManager: ObservableObject {
             createdAt: call.endedAt,
             voiceCall: call
         ))
-        currentConversation = conversation
-        selectedVoiceConversation = nil
-        showingHistory = false
+        if isVisibleEntry {
+            currentConversation = conversation
+            selectedVoiceConversation = nil
+            showingHistory = false
+        }
         Task { await store.save(conversation) }
     }
 

@@ -106,6 +106,40 @@ final class AIConversationStoreTests: XCTestCase {
         XCTAssertFalse(manager.isGeneratingQuestions)
     }
 
+    func testVoiceCallEndingAfterEntrySwitchPersistsWithoutChangingVisibleThread() async {
+        let store = AIConversationStore()
+        store.configure(rootDirectory: root)
+        let manager = AIChatManager()
+        let visible = AIConversation(
+            entryId: "entry-new", entryType: "text", entryDate: "Jul 23",
+            title: "Current note"
+        )
+        manager.currentConversation = visible
+        let endedAt = Date()
+        let call = AIVoiceCallSummary(
+            sessionId: "call-from-old-note",
+            entryId: "entry-old",
+            startedAt: endedAt.addingTimeInterval(-45),
+            endedAt: endedAt,
+            durationSeconds: 45,
+            entryType: "video",
+            entryDate: "Jul 22"
+        )
+        let currentContext = AIChatContext(
+            entryId: "entry-new", entryType: "text", entryDate: "Jul 23",
+            entryText: "New note", recentWriting: ""
+        )
+
+        manager.recordVoiceCall(call, context: currentContext, store: store)
+        await Task.yield()
+
+        XCTAssertEqual(manager.currentConversation?.id, visible.id)
+        let persisted = store.latestConversation(entryId: "entry-old")
+        XCTAssertEqual(persisted?.entryType, "video")
+        XCTAssertEqual(persisted?.entryDate, "Jul 22")
+        XCTAssertEqual(persisted?.messages.last?.voiceCall?.sessionId, "call-from-old-note")
+    }
+
     func testProviderHistoryStripsArtifactImplementationDetails() {
         let html = """
         <!doctype html><html><head><style>.secret{color:red}</style></head>

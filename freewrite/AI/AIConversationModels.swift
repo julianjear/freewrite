@@ -124,9 +124,22 @@ struct AIChatMessage: Codable, Identifiable, Equatable {
 struct AIVoiceCallSummary: Codable, Equatable {
     let sessionId: String
     let entryId: String?
+    let entryType: String?
+    let entryDate: String?
     let startedAt: Date
     let endedAt: Date
     let durationSeconds: Int
+
+    init(sessionId: String, entryId: String?, startedAt: Date, endedAt: Date,
+         durationSeconds: Int, entryType: String? = nil, entryDate: String? = nil) {
+        self.sessionId = sessionId
+        self.entryId = entryId
+        self.entryType = entryType
+        self.entryDate = entryDate
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+        self.durationSeconds = durationSeconds
+    }
 }
 
 struct AIReflectionQuestion: Codable, Identifiable, Equatable {
