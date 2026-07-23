@@ -83,6 +83,29 @@ final class AIConversationStoreTests: XCTestCase {
         XCTAssertEqual(store.textConversations.first?.messages.first?.content, "A saved question")
     }
 
+    func testPreparingAnotherEntryCancelsOpeningBeforeItCanOverwriteSelection() async {
+        let store = AIConversationStore()
+        store.configure(rootDirectory: root)
+        let manager = AIChatManager()
+        let first = AIChatContext(
+            entryId: "entry-one", entryType: "text", entryDate: "Jul 22",
+            entryText: "First note", recentWriting: ""
+        )
+        let second = AIChatContext(
+            entryId: "entry-two", entryType: "text", entryDate: "Jul 23",
+            entryText: "Second note", recentWriting: ""
+        )
+
+        manager.prepare(context: first, store: store)
+        manager.prepare(context: second, store: store)
+        manager.cancel(store: store)
+        await Task.yield()
+
+        XCTAssertEqual(manager.currentConversation?.entryId, "entry-two")
+        XCTAssertFalse(manager.isStreaming)
+        XCTAssertFalse(manager.isGeneratingQuestions)
+    }
+
     func testProviderHistoryStripsArtifactImplementationDetails() {
         let html = """
         <!doctype html><html><head><style>.secret{color:red}</style></head>

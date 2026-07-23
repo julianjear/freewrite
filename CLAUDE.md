@@ -852,6 +852,10 @@ Before transport, `AIChatRequestCompactor` keeps the latest note tail within a
 byte budget and converts prior assistant HTML artifacts back to visible text.
 This prevents CSS/JavaScript token waste and keeps long conversations under the
 Worker's 96 KB authenticated request limit without changing locally saved HTML.
+Switching notes invalidates the active chat operation before selecting or
+opening the destination conversation. Every post-await and streaming mutation
+is operation-ID guarded so a canceled prior-note stream cannot overwrite the
+new selection or clear the new task handle.
 
 OpenAI replay is role-aware: user turns use `input_text`, while assistant turns
 use `output_text`. Using `input_text` for an assistant history item makes a

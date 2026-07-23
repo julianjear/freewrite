@@ -27,6 +27,7 @@ final class AIChatManager: ObservableObject {
     }
 
     private var streamTask: Task<Void, Never>?
+    private var activeOperationID: UUID?
 
     init() {
         let defaults = UserDefaults.standard
@@ -42,8 +43,16 @@ final class AIChatManager: ObservableObject {
     }
 
     func prepare(context: AIChatContext, store: AIConversationStore) {
-        guard !isStreaming, !isGeneratingQuestions else { return }
-        if currentConversation?.entryId == context.entryId, selectedVoiceConversation == nil { return }
+        let isChangingEntry = currentConversation.map {
+            !Self.matches($0, context: context)
+        } ?? false
+        if isChangingEntry, activeOperationID != nil {
+            cancelActiveOperation(store: store)
+        }
+        guard activeOperationID == nil, !isStreaming, !isGeneratingQuestions else { return }
+        if let currentConversation,
+           Self.matches(currentConversation, context: context),
+           selectedVoiceConversation == nil { return }
         selectedVoiceConversation = nil
         showingHistory = false
         errorMessage = nil
@@ -56,7 +65,7 @@ final class AIChatManager: ObservableObject {
     }
 
     func newConversation(context: AIChatContext, store: AIConversationStore) {
-        guard !isStreaming, !isGeneratingQuestions else { return }
+        guard activeOperationID == nil, !isStreaming, !isGeneratingQuestions else { return }
         selectedVoiceConversation = nil
         showingHistory = false
         errorMessage = nil
@@ -65,7 +74,7 @@ final class AIChatManager: ObservableObject {
     }
 
     func selectText(id: UUID, store: AIConversationStore) {
-        guard !isStreaming, !isGeneratingQuestions else { return }
+        guard activeOperationID == nil, !isStreaming, !isGeneratingQuestions else { return }
         currentConversation = store.conversation(id: id)
         selectedVoiceConversation = nil
         showingHistory = false
@@ -74,7 +83,7 @@ final class AIChatManager: ObservableObject {
     }
 
     func selectVoice(id: String, store: AIConversationStore) {
-        guard !isStreaming, !isGeneratingQuestions else { return }
+        guard activeOperationID == nil, !isStreaming, !isGeneratingQuestions else { return }
         selectedVoiceConversation = store.voiceConversation(id: id)
         currentConversation = nil
         showingHistory = false
@@ -84,24 +93,43 @@ final class AIChatManager: ObservableObject {
 
     func submit(context: AIChatContext, store: AIConversationStore) {
         let userText = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !userText.isEmpty, !isStreaming, !isGeneratingQuestions else { return }
+        guard !userText.isEmpty, activeOperationID == nil,
+              !isStreaming, !isGeneratingQuestions else { return }
         draft = ""
+        let operationID = UUID()
+        activeOperationID = operationID
         streamTask = Task { [weak self] in
-            await self?.send(userText: userText, mode: "reply", context: context, store: store)
+            await self?.send(
+                userText: userText, mode: "reply", context: context,
+                store: store, operationID: operationID
+            )
         }
     }
 
     func cancel(store: AIConversationStore) {
+        cancelActiveOperation(store: store)
+    }
+
+    private func cancelActiveOperation(store: AIConversationStore) {
+        activeOperationID = nil
         streamTask?.cancel()
         streamTask = nil
         isStreaming = false
-        if var conversation = currentConversation,
-           let last = conversation.messages.last,
+        isGeneratingQuestions = false
+        guard var conversation = currentConversation else { return }
+        if let last = conversation.messages.last,
            last.role == .assistant,
            last.content.isEmpty,
-           last.tools.isEmpty {
+           last.tools.isEmpty,
+           last.images.isEmpty,
+           last.citations.isEmpty,
+           last.voiceCall == nil {
             conversation.messages.removeLast()
-            currentConversation = conversation
+        } else {
+            finalizeToolActivities(in: &conversation)
+        }
+        currentConversation = conversation
+        if !conversation.messages.isEmpty {
             Task { await store.save(conversation) }
         }
     }
@@ -114,16 +142,24 @@ final class AIChatManager: ObservableObject {
             title: context.entryDate.isEmpty ? "Opening reflection" : "Reflection · \(context.entryDate)"
         )
         currentConversation = conversation
+        let operationID = UUID()
+        activeOperationID = operationID
         streamTask = Task { [weak self] in
-            await self?.send(userText: nil, mode: "opening", context: context, store: store)
+            await self?.send(
+                userText: nil, mode: "opening", context: context,
+                store: store, operationID: operationID
+            )
         }
     }
 
     private func send(userText: String?, mode: String, context: AIChatContext,
-                      store: AIConversationStore) async {
+                      store: AIConversationStore, operationID: UUID) async {
+        guard isActive(operationID) else { return }
         let startedAt = Date.timeIntervalSinceReferenceDate
         var conversation = currentConversation
-        if conversation == nil || conversation?.entryId != context.entryId {
+        if let existing = conversation, Self.matches(existing, context: context) {
+            conversation = existing
+        } else {
             conversation = AIConversation(
                 entryId: context.entryId, entryType: context.entryType,
                 entryDate: context.entryDate
@@ -150,6 +186,7 @@ final class AIChatManager: ObservableObject {
         print("[AIChat] start conversation=\(conversation.id.uuidString) mode=\(mode) model=\(selectedModel.rawValue) history=\(conversation.messages.count - 1) contextBytes=\(context.entryText.utf8.count)")
         let persistenceStartedAt = Date.timeIntervalSinceReferenceDate
         await store.save(durableConversation)
+        guard isActive(operationID) else { return }
         let persistenceMs = Int((Date.timeIntervalSinceReferenceDate - persistenceStartedAt) * 1_000)
         print("[AIChat] checkpoint persisted conversation=\(conversation.id.uuidString) latencyMs=\(persistenceMs)")
 
@@ -162,6 +199,7 @@ final class AIChatManager: ObservableObject {
                 try await auth.signInWithGoogle()
                 token = await auth.currentToken()
             }
+            guard isActive(operationID) else { return }
             let authMs = Int((Date.timeIntervalSinceReferenceDate - authStartedAt) * 1_000)
             print("[AIChat] auth ready conversation=\(conversation.id.uuidString) latencyMs=\(authMs)")
             let events = AIChatClient().stream(
@@ -175,7 +213,7 @@ final class AIChatManager: ObservableObject {
             var eventCount = 0
             var loggedFirstToken = false
             for try await event in events {
-                guard !Task.isCancelled else { break }
+                guard isActive(operationID) else { return }
                 eventCount += 1
                 if event.type == "text-delta" {
                     if !loggedFirstToken, event.delta?.isEmpty == false {
@@ -199,18 +237,20 @@ final class AIChatManager: ObservableObject {
                     lastPublishedAt = Date.timeIntervalSinceReferenceDate
                 }
             }
+            guard isActive(operationID) else { return }
             appendText(pendingText, to: &conversation)
             finalizeToolActivities(in: &conversation)
             currentConversation = conversation
             if !Task.isCancelled {
                 await store.save(conversation)
+                guard isActive(operationID) else { return }
                 shouldGenerateQuestions = mode == "opening"
                 let elapsedMs = Int((Date.timeIntervalSinceReferenceDate - startedAt) * 1_000)
                 let characters = conversation.messages.last?.content.count ?? 0
                 print("[AIChat] finish conversation=\(conversation.id.uuidString) elapsedMs=\(elapsedMs) events=\(eventCount) chars=\(characters)")
             }
         } catch {
-            if !Task.isCancelled {
+            if isActive(operationID) {
                 let elapsedMs = Int((Date.timeIntervalSinceReferenceDate - startedAt) * 1_000)
                 print("[AIChat] failure conversation=\(conversation.id.uuidString) elapsedMs=\(elapsedMs) error=\(error.localizedDescription)")
                 errorMessage = error.localizedDescription
@@ -221,20 +261,28 @@ final class AIChatManager: ObservableObject {
                 }
                 currentConversation = conversation
                 await store.save(conversation)
+                guard isActive(operationID) else { return }
             }
         }
+        guard isActive(operationID) else { return }
         isStreaming = false
-        if shouldGenerateQuestions, !Task.isCancelled {
+        if shouldGenerateQuestions {
             await generateReflectionQuestions(
-                for: conversation, context: context, store: store
+                for: conversation, context: context, store: store,
+                operationID: operationID
             )
         }
-        streamTask = nil
+        if activeOperationID == operationID {
+            activeOperationID = nil
+            streamTask = nil
+        }
     }
 
     private func generateReflectionQuestions(for conversation: AIConversation,
                                              context: AIChatContext,
-                                             store: AIConversationStore) async {
+                                             store: AIConversationStore,
+                                             operationID: UUID) async {
+        guard isActive(operationID) else { return }
         let anchorID = conversation.messages.last(where: {
             $0.role == .assistant && $0.voiceCall == nil
         })?.id
@@ -254,8 +302,9 @@ final class AIChatManager: ObservableObject {
                 effort: reasoningEffort,
                 accessToken: await SupabaseAuth.shared.currentToken()
             )
-            guard currentConversation?.id == conversation.id else {
-                isGeneratingQuestions = false
+            guard isActive(operationID),
+                  currentConversation?.id == conversation.id else {
+                if isActive(operationID) { isGeneratingQuestions = false }
                 return
             }
             var updated = currentConversation ?? conversation
@@ -264,18 +313,30 @@ final class AIChatManager: ObservableObject {
             updated.reflectionAnchorMessageID = anchorID
             currentConversation = updated
             await store.save(updated)
+            guard isActive(operationID) else { return }
             let elapsedMs = Int((Date.timeIntervalSinceReferenceDate - startedAt) * 1_000)
             print("[AIChatQuestions] finish conversation=\(conversation.id.uuidString) elapsedMs=\(elapsedMs) count=\(result.questions.count)")
         } catch {
-            guard !Task.isCancelled else {
-                isGeneratingQuestions = false
-                return
-            }
+            guard isActive(operationID) else { return }
             questionErrorMessage = error.localizedDescription
             let elapsedMs = Int((Date.timeIntervalSinceReferenceDate - startedAt) * 1_000)
             print("[AIChatQuestions] failure conversation=\(conversation.id.uuidString) elapsedMs=\(elapsedMs) error=\(error.localizedDescription)")
         }
         isGeneratingQuestions = false
+    }
+
+    private func isActive(_ operationID: UUID) -> Bool {
+        activeOperationID == operationID && !Task.isCancelled
+    }
+
+    private static func matches(_ conversation: AIConversation,
+                                context: AIChatContext) -> Bool {
+        if let entryID = context.entryId {
+            return conversation.entryId == entryID
+        }
+        return conversation.entryId == nil
+            && conversation.entryType == context.entryType
+            && conversation.entryDate == context.entryDate
     }
 
     func recordVoiceCall(_ call: AIVoiceCallSummary, context: AIChatContext,
