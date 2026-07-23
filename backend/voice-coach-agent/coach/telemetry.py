@@ -38,53 +38,20 @@ DEEPGRAM_PER_MINUTE = {"nova-3": 0.0058, "flux-general-en": 0.0065}
 ELEVENLABS_PER_CHARACTER = 0.05 / 1000
 
 
-def _jsonable(value: Any) -> Any:
+def jsonable(value: Any) -> Any:
     if dataclasses.is_dataclass(value):
-        return {k: _jsonable(v) for k, v in dataclasses.asdict(value).items()}
+        return {k: jsonable(v) for k, v in dataclasses.asdict(value).items()}
     if hasattr(value, "model_dump"):
-        return _jsonable(value.model_dump())
+        return jsonable(value.model_dump())
     if isinstance(value, dict):
-        return {str(k): _jsonable(v) for k, v in value.items()}
+        return {str(k): jsonable(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
-        return [_jsonable(v) for v in value]
+        return [jsonable(v) for v in value]
     if isinstance(value, Enum):
         return value.value
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return str(value)
-
-
-def metric_cost_usd(metric: Any, config: VoiceSessionConfig) -> float | None:
-    kind = getattr(metric, "type", "")
-    profile = config.profile
-    if kind == "stt_metrics":
-        model = "flux-general-en" if config.turn_strategy == "flux" else "nova-3"
-        return (getattr(metric, "audio_duration", 0.0) / 60) * DEEPGRAM_PER_MINUTE[model]
-    if kind == "tts_metrics":
-        return getattr(metric, "characters_count", 0) * ELEVENLABS_PER_CHARACTER
-    if kind == "llm_metrics":
-        prices = LLM_PRICES_PER_MILLION.get(profile.model)
-        if not prices:
-            return None
-        return (
-            getattr(metric, "prompt_tokens", 0) * prices[0]
-            + getattr(metric, "completion_tokens", 0) * prices[1]
-        ) / 1_000_000
-    if kind == "realtime_model_metrics":
-        if profile.provider == "xai":
-            return (getattr(metric, "session_duration", 0.0) / 60) * 0.05
-        prices = REALTIME_TOKEN_PRICES.get(profile.model)
-        if not prices:
-            return None
-        inputs = getattr(metric, "input_token_details", None)
-        outputs = getattr(metric, "output_token_details", None)
-        return (
-            getattr(inputs, "text_tokens", 0) * prices[0]
-            + getattr(outputs, "text_tokens", 0) * prices[1]
-            + getattr(inputs, "audio_tokens", 0) * prices[2]
-            + getattr(outputs, "audio_tokens", 0) * prices[3]
-        ) / 1_000_000
-    return None
 
 
 def usage_cost_usd(usage: Any, config: VoiceSessionConfig) -> float:
@@ -155,7 +122,7 @@ class TelemetryPublisher:
             "stage": stage,
             "timestamp": datetime.now(UTC).isoformat(),
             "monotonicSeconds": time.monotonic(),
-            "detail": _jsonable(detail),
+            "detail": jsonable(detail),
         }
         logger.info("telemetry %s", json.dumps(envelope, separators=(",", ":")))
         if not self._config.observability_enabled:
@@ -170,14 +137,6 @@ class TelemetryPublisher:
             # Observability must never break the call.
             logger.exception("failed to publish telemetry event type=%s", event_type)
 
-    async def publish_metric(self, metric: Any) -> None:
-        detail = _jsonable(metric)
-        estimated = metric_cost_usd(metric, self._config)
-        if estimated is not None:
-            detail["estimatedCostUSD"] = estimated
-            detail["costKind"] = "event" if getattr(metric, "type", "") != "realtime_model_metrics" else "cumulative"
-        await self.publish("metric", getattr(metric, "type", "metric"), detail)
-
     async def publish_usage(self, usage: Any) -> None:
         # Keep the final usage update immediately preceding disconnect so the
         # persisted after-call estimate is based on the fullest metered data.
@@ -185,7 +144,7 @@ class TelemetryPublisher:
         await self.publish(
             "metric", "session-usage",
             {
-                "models": _jsonable(usage.model_usage),
+                "models": jsonable(usage.model_usage),
                 "estimatedCostUSD": sum(breakdown.values()),
                 "costBreakdownUSD": breakdown,
                 "costKind": "cumulative",

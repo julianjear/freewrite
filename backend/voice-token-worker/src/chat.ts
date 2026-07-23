@@ -1,5 +1,6 @@
 import { supabaseJWKS, verifySupabaseJWT, type VerifyKey } from "./auth";
 import { executeChatTool } from "./chat-tools";
+import { cors, json } from "./http";
 import { REFLECTION_QUESTIONS_PROMPT } from "./reflection-questions";
 
 const MAX_CHAT_REQUEST_BYTES = 96 * 1024;
@@ -250,26 +251,6 @@ function stringField(value: Record<string, unknown>, key: string): string {
 
 function numericField(value: Record<string, unknown>, key: string): number {
   return typeof value[key] === "number" ? value[key] as number : 0;
-}
-
-function cors(env: ChatEnv, origin: string | null): Record<string, string> {
-  const headers: Record<string, string> = {
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "authorization, content-type",
-    Vary: "Origin",
-  };
-  const allowed = env.ALLOWED_ORIGIN.split(",").map((value) => value.trim()).filter(Boolean);
-  if (origin && (allowed.includes("*") || allowed.includes(origin))) {
-    headers["Access-Control-Allow-Origin"] = allowed.includes("*") ? "*" : origin;
-  }
-  return headers;
-}
-
-function json(body: unknown, status: number, env: ChatEnv, origin: string | null): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json", ...cors(env, origin) },
-  });
 }
 
 async function readBoundedJSON(request: Request): Promise<unknown> {

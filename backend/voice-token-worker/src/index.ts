@@ -1,6 +1,7 @@
 import { verifySupabaseJWT, supabaseJWKS, type VerifyKey } from "./auth";
 import { signLiveKitToken } from "./token";
 import { handleChat } from "./chat";
+import { cors, json } from "./http";
 import {
   capEntryText,
   MAX_CHAT_HISTORY_BYTES,
@@ -46,26 +47,6 @@ let cachedJwks: { url: string; getKey: ReturnType<typeof supabaseJWKS> } | null 
 function jwksFor(url: string): ReturnType<typeof supabaseJWKS> {
   if (!cachedJwks || cachedJwks.url !== url) cachedJwks = { url, getKey: supabaseJWKS(url) };
   return cachedJwks.getKey;
-}
-
-function cors(env: VoiceTokenEnv, origin: string | null): Record<string, string> {
-  const headers: Record<string, string> = {
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "authorization, content-type",
-    Vary: "Origin",
-  };
-  const allowed = env.ALLOWED_ORIGIN.split(",").map((v) => v.trim()).filter(Boolean);
-  if (origin && (allowed.includes("*") || allowed.includes(origin))) {
-    headers["Access-Control-Allow-Origin"] = allowed.includes("*") ? "*" : origin;
-  }
-  return headers;
-}
-
-function json(body: unknown, status: number, env: VoiceTokenEnv, origin: string | null = null): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json", ...cors(env, origin) },
-  });
 }
 
 async function readBoundedJSON(request: Request): Promise<unknown> {

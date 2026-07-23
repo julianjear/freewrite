@@ -1213,7 +1213,8 @@ measures actual agent audio. Use `--profile` to choose a model and
   nothing until the same ID exists in Worker + agent and the Worker is deployed.
 - `metrics_collected` is deprecated in LiveKit 1.6; use
   `session_usage_updated` for cumulative usage/cost and `ChatMessage.metrics`
-  for per-turn latency.
+  for per-turn latency. Metrics may be dataclasses rather than mappings; pass
+  them through `coach.telemetry.jsonable` instead of calling `dict(...)`.
 - LiveKit 1.6 turn controls belong under `turn_handling` (`turn_detection`,
   `endpointing`, `interruption`, and `preemptive_generation`); the old flat
   `AgentSession` options are deprecated and scheduled for removal in 2.0.

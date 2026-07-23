@@ -1,13 +1,30 @@
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 import pytest
 
 from coach.config import VoiceSessionConfig
-from coach.telemetry import usage_cost_breakdown_usd, usage_cost_usd
+from coach.telemetry import jsonable, usage_cost_breakdown_usd, usage_cost_usd
 
 
 def usage(*items):
     return SimpleNamespace(model_usage=list(items))
+
+
+def test_jsonable_converts_livekit_style_metric_dataclasses():
+    @dataclass
+    class Detail:
+        tokens: int
+
+    @dataclass
+    class Metric:
+        ttft: float
+        nested: Detail
+
+    assert jsonable(Metric(ttft=0.42, nested=Detail(tokens=3))) == {
+        "ttft": 0.42,
+        "nested": {"tokens": 3},
+    }
 
 
 def test_cascade_usage_cost_combines_stt_llm_and_tts():

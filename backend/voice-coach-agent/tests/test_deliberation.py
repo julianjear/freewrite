@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from coach.deliberation import (
     AnthropicBriefAnalyzer, CoachingBrief, DeliberationCoordinator, OpenAIBriefAnalyzer,
+    _strip_json_fence,
 )
 
 
@@ -125,6 +126,14 @@ def _brief_json():
         recommended_next_move="Ask one grounded question.", candidate_questions=["What feels risky?"],
         risks=["Advice too soon"], confidence=0.8,
     ).model_dump_json()
+
+
+@pytest.mark.parametrize("value", [
+    '```json\n{"summary":"hello"}\n```',
+    '```{"summary":"hello"}```',
+])
+def test_strip_json_fence_handles_multiline_and_single_line_blocks(value):
+    assert _strip_json_fence(value) == '{"summary":"hello"}'
 
 
 @pytest.mark.asyncio

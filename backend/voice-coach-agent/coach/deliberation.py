@@ -164,7 +164,11 @@ def _analysis_prompt(transcript: str, previous: CoachingBrief | None) -> str:
 def _strip_json_fence(value: str) -> str:
     value = value.strip()
     if value.startswith("```"):
-        value = value.split("\n", 1)[1].rsplit("```", 1)[0]
+        value = value[3:]
+        if value.lower().startswith("json"):
+            value = value[4:]
+        if value.endswith("```"):
+            value = value[:-3]
     return value.strip()
 
 

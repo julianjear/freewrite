@@ -17,7 +17,7 @@ from coach.deliberation import DeliberationCoordinator, create_brief_analyzer
 from coach.opener import deliver_opener
 from coach.prompt import build_opener, build_system_prompt
 from coach.providers import build_session_components
-from coach.telemetry import TelemetryPublisher
+from coach.telemetry import TelemetryPublisher, jsonable
 
 load_dotenv()
 logger = logging.getLogger("freewrite-coach")
@@ -101,10 +101,13 @@ async def entrypoint(ctx: JobContext) -> None:
             )
         )
         if item.metrics:
+            metric_detail = jsonable(item.metrics)
+            if not isinstance(metric_detail, dict):
+                metric_detail = {"value": metric_detail}
             asyncio.create_task(
                 telemetry.publish(
                     "metric", "turn-latency",
-                    {"role": str(item.role), **dict(item.metrics)},
+                    {"role": str(item.role), **metric_detail},
                 )
             )
 
