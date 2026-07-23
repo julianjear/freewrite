@@ -44,4 +44,37 @@ final class VoiceContextTests: XCTestCase {
         XCTAssertLessThanOrEqual(context.startingQuestion?.utf8.count ?? 0,
                                  VoiceContext.maxQuestionBytes)
     }
+
+    func testConfigurationTelemetryErrorIsAlwaysUserFacing() {
+        let event = VoiceTelemetryEvent(
+            version: 1,
+            id: "event-1",
+            sequence: 1,
+            sessionId: "session-1",
+            eventType: "error",
+            stage: "configuration",
+            timestamp: "2026-07-23T20:00:00Z",
+            monotonicSeconds: 1,
+            detail: ["message": .string("Missing provider key")]
+        )
+
+        XCTAssertEqual(
+            event.userFacingErrorMessage,
+            "Coach configuration error: Missing provider key"
+        )
+    }
+
+    @MainActor
+    func testAgentStateCannotOverwriteAnErrorPhase() {
+        let current = VoiceCoachManager.Phase.error("Coach configuration error")
+
+        XCTAssertEqual(
+            VoiceCoachManager.phase(afterAgentState: "listening", current: current),
+            current
+        )
+        XCTAssertEqual(
+            VoiceCoachManager.phase(afterAgentState: "speaking", current: current),
+            current
+        )
+    }
 }

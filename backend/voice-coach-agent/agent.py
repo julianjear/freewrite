@@ -15,6 +15,7 @@ from coach.config import VoiceSessionConfig, parse_voice_config
 from coach.artifacts import VoiceArtifactPublisher
 from coach.context import parse_context
 from coach.deliberation import DeliberationCoordinator, create_brief_analyzer
+from coach.opener import deliver_opener
 from coach.prompt import build_opener, build_system_prompt
 from coach.providers import build_session_components
 from coach.telemetry import TelemetryPublisher
@@ -148,24 +149,7 @@ async def entrypoint(ctx: JobContext) -> None:
     await telemetry.publish("lifecycle", "session", {"status": "ready"})
     coordinator.start()
 
-    opener = build_opener(coach_ctx)
-    if config.profile.architecture == "cascade":
-        # Fixed opener bypasses the LLM in the cascade and reaches TTS faster.
-        await session.say(opener)
-    elif config.profile.provider != "google":
-        # Native models own speech generation, so ask for the same semantic
-        # opener through the realtime connection.
-        session.generate_reply(
-            instructions=f"Open this live call now. Say exactly this and nothing else: {opener}"
-        )
-    else:
-        # Gemini 3.1 Live explicitly ignores generate_reply and mid-session
-        # client-content updates. It starts in listening mode and answers the
-        # first user turn; pretending to send an opener creates a silent error.
-        await telemetry.publish(
-            "lifecycle", "opener",
-            {"status": "awaiting-user", "reason": "Gemini Live generate_reply limitation"},
-        )
+    await deliver_opener(session, config, build_opener(coach_ctx), telemetry.publish)
 
 
 def _request_fnc(req: agents.JobRequest):

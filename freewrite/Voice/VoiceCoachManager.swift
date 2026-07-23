@@ -284,13 +284,14 @@ final class VoiceCoachManager: ObservableObject {
             guard event.sessionId == sessionId else { return }
             telemetryEvents.append(event)
             if telemetryEvents.count > 400 { telemetryEvents.removeFirst(telemetryEvents.count - 400) }
-            if event.eventType == "lifecycle", event.stage == "session",
+            if let message = event.userFacingErrorMessage {
+                vclog("backend FAILED: \(message)")
+                coachJoinTimeoutTask?.cancel()
+                coachJoinTimeoutTask = nil
+                phase = .error(message)
+            } else if event.eventType == "lifecycle", event.stage == "session",
                event.detail["status"]?.stringValue == "ready" {
                 markCoachJoined()
-            } else if event.eventType == "error", !coachJoined,
-                      let message = event.detail["message"]?.stringValue {
-                vclog("backend startup FAILED: \(message)")
-                phase = .error("Coach configuration error: \(message)")
             }
         } catch {
             vclog("telemetry decode failed: \(error)")
@@ -339,6 +340,20 @@ final class VoiceCoachManager: ObservableObject {
         case .badURL: return "Server returned a bad address"
         }
     }
+
+    static func phase(afterAgentState state: String, current: Phase) -> Phase {
+        switch current {
+        case .ended, .error:
+            return current
+        default:
+            break
+        }
+        switch state {
+        case "speaking": return .speaking
+        case "listening", "thinking": return .listening
+        default: return current
+        }
+    }
 }
 
 extension VoiceCoachManager: RoomDelegate {
@@ -368,11 +383,7 @@ extension VoiceCoachManager: RoomDelegate {
             // A real agent state is emitted only after AgentSession startup,
             // so it is a readiness signal; participant presence alone is not.
             self.markCoachJoined()
-            switch state {
-            case "speaking": self.phase = .speaking
-            case "listening", "thinking": if self.phase != .ended { self.phase = .listening }
-            default: break
-            }
+            self.phase = Self.phase(afterAgentState: state, current: self.phase)
         }
     }
 

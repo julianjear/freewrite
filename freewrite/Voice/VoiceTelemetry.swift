@@ -67,6 +67,13 @@ struct VoiceTelemetryEvent: Codable, Identifiable, Equatable {
 
     var estimatedCostUSD: Double? { detail["estimatedCostUSD"]?.doubleValue }
     var isCumulativeCost: Bool { detail["costKind"]?.stringValue == "cumulative" }
+    var userFacingErrorMessage: String? {
+        guard eventType == "error", let message = detail["message"]?.stringValue else {
+            return nil
+        }
+        let label = stage == "configuration" ? "Coach configuration error" : "Coach error"
+        return "\(label): \(message)"
+    }
 
     var tokenBreakdownDescription: String? {
         var values: [(String, Int)] = []
