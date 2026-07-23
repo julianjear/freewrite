@@ -191,3 +191,29 @@ def parse_metadata_config(metadata: str | None) -> VoiceSessionConfig:
     if voice_config is not None and not isinstance(voice_config, dict):
         raise ValueError("voiceConfig must be a JSON object")
     return parse_voice_config(voice_config)
+
+
+def rejected_metadata_config_detail(metadata: str | None) -> dict[str, Any]:
+    """Return only rejected public selections, without implying a fallback."""
+    try:
+        value = json.loads(metadata or "")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(value, dict) or not isinstance(value.get("voiceConfig"), dict):
+        return {}
+    config = value["voiceConfig"]
+    public_keys = (
+        "version",
+        "profileId",
+        "reasoningEffort",
+        "supervisorEnabled",
+        "supervisorModel",
+        "supervisorEffort",
+        "supervisorIntervalSeconds",
+        "turnStrategy",
+    )
+    return {
+        f"requested{key[0].upper()}{key[1:]}": config[key]
+        for key in public_keys
+        if key in config and isinstance(config[key], (str, int, bool))
+    }

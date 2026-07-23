@@ -10,7 +10,11 @@ from livekit import agents
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions
 from livekit.agents.llm import ChatMessage
 
-from coach.config import VoiceSessionConfig, parse_metadata_config
+from coach.config import (
+    VoiceSessionConfig,
+    parse_metadata_config,
+    rejected_metadata_config_detail,
+)
 from coach.artifacts import VoiceArtifactPublisher
 from coach.context import parse_context
 from coach.deliberation import DeliberationCoordinator, create_brief_analyzer
@@ -39,8 +43,8 @@ async def entrypoint(ctx: JobContext) -> None:
             "configuration",
             {
                 "message": str(exc),
-                "profileId": config.profile_id,
-                "supervisorModel": config.supervisor_model,
+                "validationStatus": "rejected",
+                **rejected_metadata_config_detail(participant.metadata),
             },
         )
         # Keep the participant alive briefly so the reliable packet can reach

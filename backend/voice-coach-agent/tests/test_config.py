@@ -5,6 +5,7 @@ from coach.config import (
     PROFILES,
     parse_metadata_config,
     parse_voice_config,
+    rejected_metadata_config_detail,
 )
 
 
@@ -89,3 +90,15 @@ def test_metadata_rejects_structurally_invalid_config(metadata):
 def test_metadata_without_voice_config_uses_default():
     config = parse_metadata_config('{"entryType":"text"}')
     assert config.profile_id == DEFAULT_PROFILE_ID
+
+
+def test_rejected_metadata_reports_requested_selection_without_defaults():
+    detail = rejected_metadata_config_detail(
+        '{"voiceConfig":{"profileId":"made-up-model",'
+        '"supervisorModel":"claude-opus-4-8","supervisorEffort":"max"}}'
+    )
+    assert detail == {
+        "requestedProfileId": "made-up-model",
+        "requestedSupervisorModel": "claude-opus-4-8",
+        "requestedSupervisorEffort": "max",
+    }

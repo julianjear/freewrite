@@ -1225,7 +1225,9 @@ measures actual agent audio. Use `--profile` to choose a model and
   an otherwise live call.
 - LiveKit participant metadata with an explicit invalid `voiceConfig` must
   publish a configuration error and stop. Never silently benchmark a fallback
-  model when the selected profile or controls are invalid.
+  model when the selected profile or controls are invalid. Rejection telemetry
+  reports the requested public selections, not labels from an internal default
+  config used only to deliver the error packet.
 - The ElevenLabs plugin reads `ELEVEN_API_KEY` (not `ELEVENLABS_API_KEY`).
 - The token Worker is the model-routing boundary. App-side catalog changes do
   nothing until the same ID exists in Worker + agent and the Worker is deployed.
