@@ -886,7 +886,8 @@ finish.
 - `image_search` for public reference images via Wikimedia Commons; results are
   rendered as linked image cards in the panel.
 - `read_url` via Jina Reader for a specific public HTTP(S) page, with private/
-  localhost targets rejected, upstream timeouts, and bounded response reads.
+  localhost/internal-name targets and all IP literals rejected, upstream
+  timeouts, and bounded response reads.
 
 Tools return structured errors instead of throwing through the whole turn, and
 tool activity is visible only while observability is enabled.

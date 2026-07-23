@@ -49,13 +49,20 @@ function publicURL(raw: string): URL | null {
   try {
     const parsed = new URL(raw);
     if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return null;
-    const host = parsed.hostname.toLowerCase();
-    if (
-      host === "localhost" || host.endsWith(".localhost") || host === "0.0.0.0" ||
-      host === "::1" || host.startsWith("127.") || host.startsWith("10.") ||
-      host.startsWith("192.168.") || host.startsWith("169.254.") ||
-      /^172\.(1[6-9]|2\d|3[01])\./.test(host)
-    ) return null;
+    // URL canonicalizes alternate IPv4 spellings (integer, hex, octal, and
+    // abbreviated dotted forms), so reject every canonical IP literal rather
+    // than trying to maintain an incomplete private-range list. Normal web
+    // pages use domain hosts; this also covers IPv4-mapped and scoped IPv6.
+    const host = parsed.hostname.toLowerCase()
+      .replace(/^\[|\]$/g, "")
+      .replace(/\.+$/, "");
+    const isIPv4 = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(host);
+    const isIPv6 = host.includes(":");
+    const blockedName = [
+      "localhost", "local", "internal", "home", "lan", "test", "invalid",
+      "example", "onion",
+    ].some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
+    if (!host || isIPv4 || isIPv6 || blockedName) return null;
     return parsed;
   } catch {
     return null;

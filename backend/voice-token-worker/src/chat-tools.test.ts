@@ -22,6 +22,33 @@ describe("chat tools", () => {
     });
   });
 
+  it.each([
+    "http://localhost",
+    "http://localhost.",
+    "http://127.0.0.1",
+    "http://127.1",
+    "http://2130706433",
+    "http://0x7f000001",
+    "http://0177.0.0.1",
+    "http://10.0.0.1",
+    "http://169.254.169.254/latest/meta-data",
+    "http://192.168.1.1",
+    "http://[::1]",
+    "http://[fc00::1]",
+    "http://[fe80::1]",
+    "http://[::ffff:127.0.0.1]",
+    "https://metadata.google.internal",
+    "https://printer.local",
+  ])("blocks non-public read_url target %s", async (url) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await executeChatTool("read_url", { url }, "");
+
+    expect(result.result).toEqual({ error: "only public http(s) URLs can be read" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("keeps image results renderable and uses the descriptive fallback query", async () => {
     const responses = [
       {
