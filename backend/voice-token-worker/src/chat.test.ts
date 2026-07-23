@@ -271,6 +271,87 @@ describe("handleChat", () => {
     expect(stream).toContain('"reasoningTokens":9');
   });
 
+  it("constrains Claude reflection questions to the required JSON schema", async () => {
+    const keys = await es256();
+    const accessToken = await token(keys.privateKey);
+    const anthropicEnv = { ...testEnv, ANTHROPIC_API_KEY: "anthropic-test-key" };
+    const modelFetch: typeof fetch = async (_input, init) => {
+      const sent = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      expect(sent.tools).toBeUndefined();
+      expect(sent.output_config).toMatchObject({
+        effort: "low",
+        format: {
+          type: "json_schema",
+          schema: {
+            type: "object",
+            properties: {
+              questions: {
+                type: "object",
+                properties: {
+                  question1: { type: "string" },
+                  question2: { type: "string" },
+                  question3: { type: "string" },
+                  question4: { type: "string" },
+                  question5: { type: "string" },
+                  question6: { type: "string" },
+                },
+                required: [
+                  "question1", "question2", "question3",
+                  "question4", "question5", "question6",
+                ],
+                additionalProperties: false,
+              },
+            },
+            required: ["questions"],
+            additionalProperties: false,
+          },
+        },
+      });
+      const content = JSON.stringify({
+        questions: {
+          question1: "One?",
+          question2: "Two?",
+          question3: "Three?",
+          question4: "Four?",
+          question5: "Five?",
+          question6: "Six?",
+        },
+      });
+      return new Response([
+        { type: "message_start", message: { id: "msg_questions", model: "claude-sonnet-5", usage: {} } },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: content } },
+        { type: "content_block_stop", index: 0 },
+        { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: {} },
+        { type: "message_stop" },
+      ].map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""));
+    };
+    const response = await handleChat(
+      request(accessToken, {
+        ...validBody,
+        mode: "questions",
+        model: "claude-sonnet-5",
+        recentWriting: "Yesterday I said the decision could not keep waiting.",
+        messages: [{ role: "assistant", content: "The opening reflection." }],
+      }),
+      anthropicEnv, context(), keys.publicKey, modelFetch,
+    );
+    expect(response.status).toBe(200);
+    const stream = await response.text();
+    expect(stream).toContain("msg_questions");
+    const outputEvents = stream.split("\n")
+      .filter((line) => line.startsWith("data: "))
+      .map((line) => JSON.parse(line.slice(6)) as { type: string; delta?: string });
+    let visible = "";
+    for (const event of outputEvents) {
+      if (event.type === "text-reset") visible = "";
+      if (event.type === "text-delta") visible += event.delta ?? "";
+    }
+    expect(JSON.parse(visible)).toEqual({
+      questions: ["One?", "Two?", "Three?", "Four?", "Five?", "Six?"],
+    });
+  });
+
   it("offers only explicitly relevant tools to a Claude reply", async () => {
     const keys = await es256();
     const accessToken = await token(keys.privateKey);

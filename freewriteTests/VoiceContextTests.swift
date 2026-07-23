@@ -127,4 +127,14 @@ final class VoiceContextTests: XCTestCase {
             current
         )
     }
+
+    @MainActor
+    func testCoachDisconnectFailsEveryActiveRoomPhase() {
+        XCTAssertTrue(VoiceCoachManager.shouldFailAfterCoachDisconnect(current: .connecting))
+        XCTAssertTrue(VoiceCoachManager.shouldFailAfterCoachDisconnect(current: .listening))
+        XCTAssertTrue(VoiceCoachManager.shouldFailAfterCoachDisconnect(current: .speaking))
+        XCTAssertFalse(VoiceCoachManager.shouldFailAfterCoachDisconnect(current: .authenticating))
+        XCTAssertFalse(VoiceCoachManager.shouldFailAfterCoachDisconnect(current: .ended))
+        XCTAssertFalse(VoiceCoachManager.shouldFailAfterCoachDisconnect(current: .error("Already failed")))
+    }
 }

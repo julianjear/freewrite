@@ -154,6 +154,49 @@ const ANTHROPIC_TOOLS = [
   })),
 ] as const;
 
+const OPENAI_REFLECTION_QUESTIONS_SCHEMA = {
+  type: "object",
+  properties: {
+    questions: {
+      type: "array",
+      minItems: 6,
+      maxItems: 6,
+      items: { type: "string" },
+    },
+  },
+  required: ["questions"],
+  additionalProperties: false,
+} as const;
+
+const ANTHROPIC_QUESTION_KEYS = [
+  "question1", "question2", "question3", "question4", "question5", "question6",
+] as const;
+
+// Anthropic structured outputs support object requirements but only minItems
+// values 0 and 1, and no maxItems. Six required fields guarantee the exact
+// cardinality; the Worker normalizes this provider shape back to the app's
+// stable `{ "questions": string[] }` contract after streaming completes.
+const ANTHROPIC_REFLECTION_QUESTIONS_SCHEMA = {
+  type: "object",
+  properties: {
+    questions: {
+      type: "object",
+      properties: {
+        question1: { type: "string" },
+        question2: { type: "string" },
+        question3: { type: "string" },
+        question4: { type: "string" },
+        question5: { type: "string" },
+        question6: { type: "string" },
+      },
+      required: ANTHROPIC_QUESTION_KEYS,
+      additionalProperties: false,
+    },
+  },
+  required: ["questions"],
+  additionalProperties: false,
+} as const;
+
 type ChatToolName = "web_search" | "search_current_note" | "image_search" | "read_url";
 
 function requestedTools(body: ChatRequestBody): Set<ChatToolName> {
@@ -393,6 +436,31 @@ function stripHTMLFence(value: string): string {
     .replace(/^```(?:html)?\s*/i, "")
     .replace(/\s*```$/i, "")
     .trim();
+}
+
+function normalizedReflectionQuestions(value: string): string {
+  const root = record(JSON.parse(stripHTMLFence(value)));
+  const rawQuestions = root?.questions;
+  const questions = Array.isArray(rawQuestions)
+    ? rawQuestions
+    : ANTHROPIC_QUESTION_KEYS.map((key) => stringField(record(rawQuestions) ?? {}, key));
+  if (questions.length !== 6 || questions.some(
+    (question) => typeof question !== "string" || question.trim().length === 0
+  )) {
+    throw new Error("The model did not return six reflection questions");
+  }
+  return JSON.stringify({
+    questions: questions.map((question) => (question as string).trim()),
+  });
+}
+
+async function enforceReflectionQuestions(body: ChatRequestBody, writer: SSEWriter): Promise<void> {
+  if (body.mode !== "questions") return;
+  const original = writer.visibleText();
+  const normalized = normalizedReflectionQuestions(original);
+  if (original.trim() === normalized) return;
+  await writer.send({ type: "text-reset" });
+  await writer.send({ type: "text-delta", delta: normalized });
 }
 
 function escapeHTML(value: string): string {
@@ -816,19 +884,7 @@ async function runOpenAI(body: ChatRequestBody, env: ChatEnv, writer: SSEWriter,
             type: "json_schema",
             name: "reflection_questions",
             strict: true,
-            schema: {
-              type: "object",
-              properties: {
-                questions: {
-                  type: "array",
-                  minItems: 6,
-                  maxItems: 6,
-                  items: { type: "string" },
-                },
-              },
-              required: ["questions"],
-              additionalProperties: false,
-            },
+            schema: OPENAI_REFLECTION_QUESTIONS_SCHEMA,
           },
         },
       } : forceFinalAnswer || availableTools.length === 0
@@ -885,7 +941,15 @@ async function runAnthropic(body: ChatRequestBody, env: ChatEnv, writer: SSEWrit
       ],
       messages,
       thinking: { type: "adaptive", display: "omitted" },
-      output_config: { effort: body.reasoningEffort },
+      output_config: {
+        effort: body.reasoningEffort,
+        ...(body.mode === "questions" ? {
+          format: {
+            type: "json_schema",
+            schema: ANTHROPIC_REFLECTION_QUESTIONS_SCHEMA,
+          },
+        } : {}),
+      },
       ...(availableTools.length === 0 ? {} : {
           tools: availableTools,
           // A single tool per provider round avoids the ambiguous mixed
@@ -953,6 +1017,7 @@ async function runChat(body: ChatRequestBody, env: ChatEnv, writer: SSEWriter, f
     ? await runAnthropic(body, env, writer, fetcher)
     : await runOpenAI(body, env, writer, fetcher);
   await enforceHTMLArtifact(body, writer);
+  await enforceReflectionQuestions(body, writer);
   const latencyMs = Date.now() - startedAt;
   const cost = usageCost(result.model, result.usage);
   await writer.send({

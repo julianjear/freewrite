@@ -367,6 +367,15 @@ final class VoiceCoachManager: ObservableObject {
         default: return current
         }
     }
+
+    static func shouldFailAfterCoachDisconnect(current: Phase) -> Bool {
+        switch current {
+        case .connecting, .listening, .speaking:
+            return true
+        case .idle, .authenticating, .ended, .error:
+            return false
+        }
+    }
 }
 
 extension VoiceCoachManager: RoomDelegate {
@@ -378,8 +387,8 @@ extension VoiceCoachManager: RoomDelegate {
     nonisolated func room(_ room: Room, participantDidDisconnect participant: RemoteParticipant) {
         guard Self.isCoach(participant) else { return }
         Task { @MainActor in
-            if self.phase == .listening || self.phase == .speaking {
-                self.phase = .error("The coach disconnected. Try again.")
+            if Self.shouldFailAfterCoachDisconnect(current: self.phase) {
+                await self.failActiveCall("The coach disconnected. Try again.")
             }
         }
     }

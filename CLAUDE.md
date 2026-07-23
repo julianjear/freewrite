@@ -864,6 +864,11 @@ persist the hidden opening prompt as a visible user message. The Worker also
 enforces that contract after streaming: valid full artifacts pass through,
 fragments receive a document shell, and plain text receives a deterministic,
 escaped HTML artifact through `text-reset` before finish.
+Reflection-question turns use provider-enforced structured output. OpenAI emits
+the stable six-item array directly; Anthropic emits six required named fields
+because its raw schema does not support exact array cardinality, then the Worker
+normalizes them to the same `{ "questions": string[] }` client contract before
+finish.
 
 **Tools:**
 - OpenAI or Anthropic hosted `web_search` for current/external facts and linked
@@ -1195,10 +1200,11 @@ measures actual agent audio. Use `--profile` to choose a model and
   refresh; otherwise an expired disk session can produce misleading 401s.
   Concurrent sign-in callers must share `OAuthSignInCoordinator`; replacing a
   pending callback continuation strands the earlier caller.
-- Fatal coach configuration and non-recoverable agent-session telemetry errors
-  must cancel level polling and disconnect the LiveKit room so a failed call
-  cannot leave the microphone published. Supervisor and recoverable provider
-  errors remain visible in observability without ending an otherwise live call.
+- Fatal coach configuration, non-recoverable agent-session telemetry errors,
+  and unexpected coach disconnects in any active room phase must cancel level
+  polling and disconnect the LiveKit room so a failed call cannot leave the
+  microphone published. Supervisor and recoverable provider errors remain
+  visible in observability without ending an otherwise live call.
 - LiveKit participant metadata with an explicit invalid `voiceConfig` must
   publish a configuration error and stop. Never silently benchmark a fallback
   model when the selected profile or controls are invalid.
