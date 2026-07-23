@@ -218,6 +218,7 @@ final class VoiceCoachManager: ObservableObject {
         guard !isEnding, phase != .idle, phase != .ended else { return }
         isEnding = true
         defer { isEnding = false }
+        let shouldPublishCompletion = Self.shouldPublishCompletion(for: phase)
         vclog("end session=\(sessionId) transcriptLines=\(transcript.count) events=\(telemetryEvents.count)")
         coachJoinTimeoutTask?.cancel(); coachJoinTimeoutTask = nil
         levelTask?.cancel(); levelTask = nil
@@ -225,7 +226,9 @@ final class VoiceCoachManager: ObservableObject {
         room = nil
         if let completed = await persistSession() {
             durationSeconds = completed.durationSeconds
-            lastCompletedCall = completed
+            if shouldPublishCompletion {
+                lastCompletedCall = completed
+            }
         }
         phase = .ended
     }
@@ -383,6 +386,15 @@ final class VoiceCoachManager: ObservableObject {
         case .connecting, .listening, .speaking:
             return true
         case .idle, .authenticating, .ended, .error:
+            return false
+        }
+    }
+
+    static func shouldPublishCompletion(for phase: Phase) -> Bool {
+        switch phase {
+        case .listening, .speaking:
+            return true
+        case .idle, .authenticating, .connecting, .ended, .error:
             return false
         }
     }

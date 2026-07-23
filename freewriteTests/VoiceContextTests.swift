@@ -137,4 +137,13 @@ final class VoiceContextTests: XCTestCase {
         XCTAssertFalse(VoiceCoachManager.shouldFailAfterCoachDisconnect(current: .ended))
         XCTAssertFalse(VoiceCoachManager.shouldFailAfterCoachDisconnect(current: .error("Already failed")))
     }
+
+    @MainActor
+    func testOnlyEstablishedHealthyCallsPublishCompletionCards() {
+        XCTAssertTrue(VoiceCoachManager.shouldPublishCompletion(for: .listening))
+        XCTAssertTrue(VoiceCoachManager.shouldPublishCompletion(for: .speaking))
+        XCTAssertFalse(VoiceCoachManager.shouldPublishCompletion(for: .connecting))
+        XCTAssertFalse(VoiceCoachManager.shouldPublishCompletion(for: .error("Coach failed")))
+        XCTAssertFalse(VoiceCoachManager.shouldPublishCompletion(for: .ended))
+    }
 }
