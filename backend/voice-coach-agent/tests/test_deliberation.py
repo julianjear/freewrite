@@ -82,6 +82,34 @@ async def test_does_not_reanalyze_without_new_messages():
 
 
 @pytest.mark.asyncio
+async def test_failed_snapshot_waits_for_a_new_turn_before_retrying():
+    calls = 0
+    events = []
+
+    class FailingAnalyzer:
+        async def analyze(self, transcript, previous):
+            nonlocal calls
+            calls += 1
+            raise RuntimeError("provider unavailable")
+
+    async def publish(*event):
+        events.append(event)
+
+    coordinator = DeliberationCoordinator(
+        parse_voice_config(None), FailingAnalyzer(), publish, CoachContext()
+    )
+    coordinator.add_message("user", "I feel stuck")
+    await coordinator.analyze_now()
+    await coordinator.analyze_now()
+    assert calls == 1
+
+    coordinator.add_message("user", "There is one new thing.")
+    await coordinator.analyze_now()
+    assert calls == 2
+    assert [event[1] for event in events] == ["supervisor", "supervisor"]
+
+
+@pytest.mark.asyncio
 async def test_does_not_analyze_scripted_opener_without_a_user_turn():
     calls = 0
 

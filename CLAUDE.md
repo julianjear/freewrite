@@ -1160,9 +1160,11 @@ provider-valid thinking effort. It emits a concise structured `CoachingBrief`
 (not chain-of-thought), injects the full brief into the next response's system
 context for providers supporting dynamic instructions, and exposes the same
 brief through `get_coaching_brief`. The injection/fallback result is published
-with the brief for observability. Gemini 3.1 Live cannot reliably accept
-`generate_reply`, instructions, or chat-context updates after turn one, so it
-starts by listening and uses the tool-only strategist fallback.
+with the brief for observability. A failed transcript snapshot is reported once
+and is not retried until a new conversation turn arrives. Gemini 3.1 Live
+cannot reliably accept `generate_reply`, instructions, or chat-context updates
+after turn one, so it starts by listening and uses the tool-only strategist
+fallback.
 
 **Observability:** the agent publishes config, lifecycle, transcript, per-turn
 latency, sampled cumulative provider usage/cost estimates, errors, and briefs over the
@@ -1209,7 +1211,8 @@ measures actual agent audio. Use `--profile` to choose a model and
   `Session.isExpired`, and re-open Google sign-in when `currentToken()` cannot
   refresh; otherwise an expired disk session can produce misleading 401s.
   Concurrent sign-in callers must share `OAuthSignInCoordinator`; replacing a
-  pending callback continuation strands the earlier caller.
+  pending callback continuation strands the earlier caller. A voice-token 401
+  gets one bounded refresh retry and reopens OAuth if refresh yields no token.
 - Fatal coach configuration, non-recoverable agent-session telemetry errors,
   and unexpected coach disconnects in any active room phase must cancel level
   polling and disconnect the LiveKit room so a failed call cannot leave the

@@ -241,14 +241,19 @@ class DeliberationCoordinator:
         # until at least one genuine user turn is present.
         if not any(role.lower().endswith("user") for role, _ in self._messages):
             return
-        transcript = "\n".join(f"{role}: {text}" for role, text in self._messages)
+        # Capture the boundary before a slow provider call. A turn arriving
+        # during analysis must remain eligible for the next interval.
+        message_count = len(self._messages)
+        transcript = "\n".join(
+            f"{role}: {text}" for role, text in self._messages[:message_count]
+        )
         try:
             brief, metrics = await self.analyzer.analyze(transcript, self.latest)
             self._revision += 1
             brief.revision = self._revision
             brief.generated_at = datetime.now(UTC).isoformat()
             self.latest = brief
-            self._analyzed_message_count = len(self._messages)
+            self._analyzed_message_count = message_count
             delivery = await self._inject_brief()
             payload = brief.model_dump()
             payload["metrics"] = metrics
@@ -274,6 +279,9 @@ class DeliberationCoordinator:
             )
             await self.publish("supervisor", "brief", payload)
         except Exception as exc:
+            # Do not bill/re-log the same failed transcript forever. A newly
+            # appended conversation turn makes the next interval eligible.
+            self._analyzed_message_count = message_count
             logger.exception("background deliberation failed")
             await self.publish("error", "supervisor", {"message": str(exc)})
 

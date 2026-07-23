@@ -180,11 +180,17 @@ final class VoiceCoachManager: ObservableObject {
                 accessToken: await auth.currentToken()
             )
         } catch VoiceTokenError.badResponse(401, _) {
-            // One bounded retry after asking Supabase to refresh the session.
+            // One bounded retry after refresh; if Supabase cannot recover a
+            // token, reopen OAuth instead of failing while text chat can sign in.
             await auth.restore()
+            var token = await auth.currentToken()
+            if token == nil {
+                try await auth.signInWithGoogle()
+                token = await auth.currentToken()
+            }
             return try await client.mint(
                 context: context, entryId: entryId, configuration: configuration,
-                accessToken: await auth.currentToken()
+                accessToken: token
             )
         }
     }
