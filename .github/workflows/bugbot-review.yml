@@ -13,11 +13,19 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+    env:
+      PR_COMMENT_TOKEN: ${{ secrets.PR_COMMENT_TOKEN }}
     steps:
+      - name: Explain native-review fallback
+        if: env.PR_COMMENT_TOKEN == ''
+        run: |
+          echo "::notice::PR_COMMENT_TOKEN is not configured. Cursor's native Every Push review remains active; add a fine-grained token scoped to this repository to enable comment-triggered reviews."
+
       - name: Comment Bugbot command
+        if: env.PR_COMMENT_TOKEN != ''
         uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9
         with:
-          github-token: ${{ secrets.PR_COMMENT_TOKEN || github.token }}
+          github-token: ${{ env.PR_COMMENT_TOKEN }}
           script: |
             const pullRequest = context.payload.pull_request;
             if (!pullRequest) {
