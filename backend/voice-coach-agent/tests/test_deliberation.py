@@ -82,6 +82,31 @@ async def test_does_not_reanalyze_without_new_messages():
 
 
 @pytest.mark.asyncio
+async def test_back_to_back_identical_turns_reach_the_strategist():
+    transcripts = []
+
+    class CapturingAnalyzer(StubAnalyzer):
+        async def analyze(self, transcript, previous):
+            transcripts.append(transcript)
+            return await super().analyze(transcript, previous)
+
+    async def publish(*_):
+        pass
+
+    coordinator = DeliberationCoordinator(
+        parse_voice_config(None), CapturingAnalyzer(), publish, CoachContext()
+    )
+    coordinator.add_message("user", "I feel stuck")
+    coordinator.add_message("user", "I feel stuck")
+    await coordinator.analyze_now()
+
+    assert transcripts[0].splitlines() == [
+        "user: I feel stuck",
+        "user: I feel stuck",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_failed_snapshot_waits_for_a_new_turn_before_retrying():
     calls = 0
     events = []

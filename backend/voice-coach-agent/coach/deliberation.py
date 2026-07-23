@@ -217,7 +217,7 @@ class DeliberationCoordinator:
 
     def add_message(self, role: str, text: str) -> None:
         text = text.strip()
-        if text and (not self._messages or self._messages[-1] != (role, text)):
+        if text:
             self._messages.append((role, text))
 
     def start(self) -> None:
