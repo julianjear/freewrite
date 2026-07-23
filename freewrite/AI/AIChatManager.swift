@@ -192,13 +192,8 @@ final class AIChatManager: ObservableObject {
 
         var shouldGenerateQuestions = false
         do {
-            let auth = SupabaseAuth.shared
             let authStartedAt = Date.timeIntervalSinceReferenceDate
-            var token = await auth.currentToken()
-            if token == nil {
-                try await auth.signInWithGoogle()
-                token = await auth.currentToken()
-            }
+            let token = try await authenticatedAccessToken()
             guard isActive(operationID) else { return }
             let authMs = Int((Date.timeIntervalSinceReferenceDate - authStartedAt) * 1_000)
             print("[AIChat] auth ready conversation=\(conversation.id.uuidString) latencyMs=\(authMs)")
@@ -295,12 +290,14 @@ final class AIChatManager: ObservableObject {
         let startedAt = Date.timeIntervalSinceReferenceDate
         print("[AIChatQuestions] start conversation=\(conversation.id.uuidString) model=\(selectedModel.rawValue)")
         do {
+            let token = try await authenticatedAccessToken()
+            guard isActive(operationID) else { return }
             let result = try await AIChatClient().reflectionQuestions(
                 conversation: conversation,
                 context: context,
                 model: selectedModel,
                 effort: reasoningEffort,
-                accessToken: await SupabaseAuth.shared.currentToken()
+                accessToken: token
             )
             guard isActive(operationID),
                   currentConversation?.id == conversation.id else {
@@ -327,6 +324,16 @@ final class AIChatManager: ObservableObject {
 
     private func isActive(_ operationID: UUID) -> Bool {
         activeOperationID == operationID && !Task.isCancelled
+    }
+
+    private func authenticatedAccessToken() async throws -> String {
+        let auth = SupabaseAuth.shared
+        if let token = await auth.currentToken() { return token }
+        try await auth.signInWithGoogle()
+        guard let token = await auth.currentToken() else {
+            throw AIChatClientError.notAuthenticated
+        }
+        return token
     }
 
     private static func matches(_ conversation: AIConversation,

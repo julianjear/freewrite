@@ -894,9 +894,12 @@ The default text model is GPT-5.6 Terra with low reasoning for latency. GPT-5.6
 Sol, Claude Sonnet 5, Claude Opus 4.8, Claude Fable 5, and provider-valid effort
 levels are selectable in the composer. Anthropic models require the Worker's
 optional `ANTHROPIC_API_KEY`; missing configuration returns HTTP 409 instead of
-silently changing models. Token and cost labels expose hover breakdowns for
-input/cache-write/cached/output/reasoning/search components. Costs are
-list-price estimates and must not be treated as billing truth.
+silently changing models. Unknown model/effort combinations return HTTP 400;
+never fall back during comparisons. Opening, reply, and reflection-question
+calls share the same refresh-then-sign-in token path. Token and cost labels
+expose hover breakdowns for input/cache-write/cached/output/reasoning/search
+components. Costs are list-price estimates and must not be treated as billing
+truth.
 
 ### Prompts
 

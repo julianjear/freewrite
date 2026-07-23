@@ -52,6 +52,7 @@ const validBody = {
   messages: [{ role: "user", content: "What do you notice?" }],
   model: "gpt-5.6-terra",
   reasoningEffort: "low",
+  mode: "reply",
 };
 
 describe("handleChat", () => {
@@ -72,6 +73,34 @@ describe("handleChat", () => {
     );
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ error: "last message must be from the user" });
+  });
+
+  it("rejects unknown models instead of silently changing the selection", async () => {
+    const keys = await es256();
+    const accessToken = await token(keys.privateKey);
+    const response = await handleChat(
+      request(accessToken, { ...validBody, model: "gpt-surprise" }),
+      testEnv,
+      context(),
+      keys.publicKey,
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: "unsupported model: gpt-surprise" });
+  });
+
+  it("rejects effort levels unsupported by the selected model", async () => {
+    const keys = await es256();
+    const accessToken = await token(keys.privateKey);
+    const response = await handleChat(
+      request(accessToken, { ...validBody, reasoningEffort: "max" }),
+      testEnv,
+      context(),
+      keys.publicKey,
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: "unsupported reasoningEffort for gpt-5.6-terra: max",
+    });
   });
 
   it("streams text, usage, and finish events from the model", async () => {

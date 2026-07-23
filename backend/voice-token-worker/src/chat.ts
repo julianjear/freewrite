@@ -299,16 +299,26 @@ function parseBody(raw: unknown): ChatRequestBody {
   const entryType = body.entryType === "video" ? "video" : "text";
   const entryDate = stringField(body, "entryDate").slice(0, 64);
   const entryText = stringField(body, "entryText").slice(-MAX_NOTE_CHARS);
-  const mode: ChatMode = body.mode === "opening"
-    ? "opening"
-    : body.mode === "questions" ? "questions" : "reply";
+  const rawMode = stringField(body, "mode");
+  if (!["opening", "reply", "questions"].includes(rawMode)) {
+    throw new Error(`unsupported mode: ${rawMode || "(missing)"}`);
+  }
+  const mode = rawMode as ChatMode;
   const supportedModels: ChatModel[] = [
     "gpt-5.6-terra", "gpt-5.6-sol", "claude-sonnet-5", "claude-opus-4-8", "claude-fable-5",
   ];
-  const rawModel = stringField(body, "model") as ChatModel;
-  const model = supportedModels.includes(rawModel) ? rawModel : "gpt-5.6-terra";
-  const requestedEffort = stringField(body, "reasoningEffort") as ReasoningEffort;
-  const reasoningEffort = allowedEfforts(model).includes(requestedEffort) ? requestedEffort : "low";
+  const rawModel = stringField(body, "model");
+  if (!supportedModels.includes(rawModel as ChatModel)) {
+    throw new Error(`unsupported model: ${rawModel || "(missing)"}`);
+  }
+  const model = rawModel as ChatModel;
+  const requestedEffort = stringField(body, "reasoningEffort");
+  if (!allowedEfforts(model).includes(requestedEffort as ReasoningEffort)) {
+    throw new Error(
+      `unsupported reasoningEffort for ${model}: ${requestedEffort || "(missing)"}`
+    );
+  }
+  const reasoningEffort = requestedEffort as ReasoningEffort;
 
   if (!Array.isArray(body.messages)) throw new Error("messages must be an array");
   const messages: ChatMessageInput[] = body.messages.slice(-MAX_HISTORY_MESSAGES).map((item) => {
