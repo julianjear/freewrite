@@ -7,6 +7,8 @@ struct MarkdownEditor: NSViewRepresentable {
     var textColor: NSColor
     var backgroundColor: NSColor
     var lineSpacing: CGFloat
+    var controller: EditorController? = nil
+    var suppressTextInteraction = false
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -27,8 +29,8 @@ struct MarkdownEditor: NSViewRepresentable {
             return scrollView
         }
 
-        textView.isEditable = true
-        textView.isSelectable = true
+        textView.isEditable = !suppressTextInteraction
+        textView.isSelectable = !suppressTextInteraction
         textView.allowsUndo = true
         textView.isRichText = true
         textView.usesFontPanel = false
@@ -64,6 +66,8 @@ struct MarkdownEditor: NSViewRepresentable {
         context.coordinator.currentFont = font
         context.coordinator.currentTextColor = textColor
         context.coordinator.currentLineSpacing = lineSpacing
+        context.coordinator.parent = self
+        context.coordinator.registerWith(controller)
 
         textView.string = Coordinator.markdownToDisplay(text)
         context.coordinator.applyMarkdownStyling()
@@ -77,10 +81,14 @@ struct MarkdownEditor: NSViewRepresentable {
         scrollView.backgroundColor = backgroundColor
         textView.backgroundColor = backgroundColor
         textView.insertionPointColor = textColor
+        textView.isEditable = !suppressTextInteraction
+        textView.isSelectable = !suppressTextInteraction
 
         context.coordinator.currentFont = font
         context.coordinator.currentTextColor = textColor
         context.coordinator.currentLineSpacing = lineSpacing
+        context.coordinator.parent = self
+        context.coordinator.registerWith(controller)
 
         let displayText = Coordinator.markdownToDisplay(text)
         if textView.string != displayText {
@@ -266,9 +274,19 @@ struct MarkdownEditor: NSViewRepresentable {
 
         // MARK: - Header Styling
 
-        private func applyHeaderStyling(storage: NSTextStorage, nsText: NSString, fullRange: NSRange, prefix: String, sizeMultiplier: CGFloat) {
+        static func headerPattern(prefix: String) -> NSRegularExpression? {
             let escapedPrefix = NSRegularExpression.escapedPattern(for: prefix)
-            guard let regex = try? NSRegularExpression(pattern: "^\(escapedPrefix).+", options: .anchorsMatchLines) else { return }
+            return try? NSRegularExpression(
+                pattern: "^\(escapedPrefix).*",
+                options: .anchorsMatchLines
+            )
+        }
+
+        private func applyHeaderStyling(storage: NSTextStorage, nsText: NSString, fullRange: NSRange, prefix: String, sizeMultiplier: CGFloat) {
+            // Match the marker immediately, even before the first heading
+            // character exists. `.+` delayed the visual heading state until
+            // the user typed one more character after "# ".
+            guard let regex = Self.headerPattern(prefix: prefix) else { return }
 
             regex.enumerateMatches(in: nsText as String, range: fullRange) { match, _, _ in
                 guard let range = match?.range else { return }
@@ -429,6 +447,113 @@ struct MarkdownEditor: NSViewRepresentable {
             }
 
             return false
+        }
+
+        // MARK: - External insertion
+
+        /// Inserts a prompt at the current cursor on its own line. The normal
+        /// text-change path handles markdown styling, persistence, and undo.
+        func insertAtCursor(_ string: String) {
+            guard let textView else { return }
+            textView.isEditable = true
+            textView.isSelectable = true
+
+            let selection = textView.selectedRange()
+            let source = textView.string as NSString
+            var prefix = ""
+            if selection.location > 0,
+               source.character(at: selection.location - 1) != 0x0A {
+                prefix = "\n\n"
+            } else if selection.location > 1,
+                      source.character(at: selection.location - 2) != 0x0A {
+                prefix = "\n"
+            }
+
+            var suffix = "\n\n"
+            if selection.location < source.length,
+               source.character(at: selection.location) == 0x0A {
+                suffix = "\n"
+            }
+
+            let insertion = prefix + string + suffix
+            textView.insertText(insertion, replacementRange: selection)
+            textView.setSelectedRange(NSRange(
+                location: selection.location + (insertion as NSString).length,
+                length: 0
+            ))
+            textView.scrollRangeToVisible(textView.selectedRange())
+        }
+
+        /// Adds a reflection question as the final H3 section and deliberately
+        /// leaves enough writable space below it to position the prompt near
+        /// the top of the editor instead of stranded against the bottom edge.
+        @discardableResult
+        func appendReflectionQuestion(_ question: String) -> Bool {
+            guard let textView else { return false }
+            let clean = question.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !clean.isEmpty else { return false }
+
+            textView.isEditable = true
+            textView.isSelectable = true
+            let source = textView.string as NSString
+            let separator: String
+            if source.length == 0 || source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                separator = ""
+            } else if source.hasSuffix("\n\n") {
+                separator = ""
+            } else if source.hasSuffix("\n") {
+                separator = "\n"
+            } else {
+                separator = "\n\n"
+            }
+
+            let scrollView = textView.enclosingScrollView
+            let viewportHeight = max(320, scrollView?.contentView.bounds.height ?? 0)
+            let lineHeight = max(
+                18,
+                NSLayoutManager().defaultLineHeight(for: currentFont) + currentLineSpacing
+            )
+            let trailingLineCount = min(30, max(14, Int(ceil(viewportHeight * 0.72 / lineHeight))))
+            let heading = "### \(clean)"
+            let answerPrefix = "\(separator)\(heading)\n\n"
+            let insertion = answerPrefix + String(repeating: "\n", count: trailingLineCount)
+            let headingLocation = source.length + (separator as NSString).length
+            let answerLocation = source.length + (answerPrefix as NSString).length
+
+            textView.setSelectedRange(NSRange(location: source.length, length: 0))
+            textView.insertText(insertion, replacementRange: textView.selectedRange())
+            textView.setSelectedRange(NSRange(location: answerLocation, length: 0))
+            applyMarkdownStyling()
+            textView.window?.makeFirstResponder(textView)
+
+            DispatchQueue.main.async { [weak self, weak textView] in
+                guard let self, let textView,
+                      let scrollView = textView.enclosingScrollView,
+                      let layoutManager = textView.layoutManager,
+                      let textContainer = textView.textContainer else { return }
+                layoutManager.ensureLayout(for: textContainer)
+                let characterRange = NSRange(
+                    location: headingLocation,
+                    length: (heading as NSString).length
+                )
+                let glyphRange = layoutManager.glyphRange(
+                    forCharacterRange: characterRange,
+                    actualCharacterRange: nil
+                )
+                var headingRect = layoutManager.boundingRect(
+                    forGlyphRange: glyphRange,
+                    in: textContainer
+                )
+                headingRect.origin.y += textView.textContainerOrigin.y
+                let clipView = scrollView.contentView
+                let maxY = max(0, textView.bounds.height - clipView.bounds.height)
+                let targetY = min(maxY, max(0, headingRect.minY - clipView.bounds.height * 0.18))
+                clipView.scroll(to: NSPoint(x: clipView.bounds.origin.x, y: targetY))
+                scrollView.reflectScrolledClipView(clipView)
+                textView.setSelectedRange(NSRange(location: answerLocation, length: 0))
+                self.applyMarkdownStyling()
+            }
+            return true
         }
     }
 }

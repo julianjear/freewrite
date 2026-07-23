@@ -1,0 +1,6 @@
+LIVEKIT_URL=wss://your-project.livekit.cloud
+LIVEKIT_API_KEY=replace-me
+LIVEKIT_API_SECRET=replace-me
+OPENAI_API_KEY=replace-me
+# Optional: uncomment to enable Claude Sonnet, Opus, and Fable chat models.
+# ANTHROPIC_API_KEY=replace-me

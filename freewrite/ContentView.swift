@@ -101,6 +101,7 @@ struct ContentView: View {
 
     private let headerString = "\n\n"
     @State private var entries: [HumanEntry] = []
+    @State private var entryTextSnapshots: [UUID: String] = [:]
     @State private var text: String = ""  // Remove initial welcome text since we'll handle it in createNewEntry
     
     @State private var isFullscreen = false
@@ -125,8 +126,16 @@ struct ContentView: View {
     @State private var selectedEntryId: UUID? = nil
     @State private var hoveredEntryId: UUID? = nil
     @State private var isHoveringChat = false  // Add this state variable
-    @State private var showingChatMenu = false
-    @State private var chatMenuAnchor: CGPoint = .zero
+    @State private var showingAIPanel = false
+    @State private var aiPanelExpanded = false
+    @StateObject private var aiConversationStore = AIConversationStore()
+    @StateObject private var aiChatManager = AIChatManager()
+    @State private var isHoveringVoice = false
+    @State private var showingVoiceSetup = false
+    @State private var showingVoiceCoach = false
+    @State private var pendingVoiceQuestion: String?
+    @StateObject private var voiceManager = VoiceCoachManager()
+    @StateObject private var voiceConfigurationStore = VoiceConfigurationStore()
     @State private var showingSidebar = false  // Add this state variable
     @State private var hoveredTrashId: UUID? = nil
     @State private var hoveredExportId: UUID? = nil
@@ -140,7 +149,6 @@ struct ContentView: View {
     @State private var isHoveringCopyTranscript = false
     @State private var colorScheme: ColorScheme = .light // Add state for color scheme
     @State private var isHoveringThemeToggle = false // Add state for theme toggle hover
-    @State private var didCopyPrompt: Bool = false // Add state for copy prompt feedback
     @State private var didCopyTranscript: Bool = false
     @State private var selectedVideoHasTranscript = false
     @State private var backspaceDisabled = false // Add state for backspace toggle
@@ -159,6 +167,11 @@ struct ContentView: View {
     @State private var showingVideoPermissionPopover = false
     @State private var videoPermissionPopoverItems: [VideoPermissionPopoverItem] = []
     @State private var videoPermissionPopoverFallbackMessage: String? = nil
+    @StateObject private var promptsStore = PromptsStore.shared
+    @StateObject private var promptsModel = PromptsCardViewModel()
+    @StateObject private var editorController = EditorController()
+    @State private var isHoveringPrompts = false
+    @State private var promptsKeyMonitor: Any?
     let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     let entryHeight: CGFloat = 40
     
@@ -217,33 +230,6 @@ struct ContentView: View {
         cache.countLimit = 512
         return cache
     }()
-    
-    // Add shared prompt constant
-    private let aiChatPrompt = """
-    below is my journal entry. wyt? talk through it with me like a friend. don't therpaize me and give me a whole breakdown, don't repeat my thoughts with headings. really take all of this, and tell me back stuff truly as if you're an old homie.
-    
-    Keep it casual, dont say yo, help me make new connections i don't see, comfort, validate, challenge, all of it. dont be afraid to say a lot. format with markdown headings if needed.
-
-    do not just go through every single thing i say, and say it back to me. you need to proccess everythikng is say, make connections i don't see it, and deliver it all back to me as a story that makes me feel what you think i wanna feel. thats what the best therapists do.
-
-    ideally, you're style/tone should sound like the user themselves. it's as if the user is hearing their own tone but it should still feel different, because you have different things to say and don't just repeat back they say.
-
-    else, start by saying, "hey, thanks for showing me this. my thoughts:"
-        
-    my entry:
-    """
-    
-    private let claudePrompt = """
-    Take a look at my journal entry below. I'd like you to analyze it and respond with deep insight that feels personal, not clinical.
-    Imagine you're not just a friend, but a mentor who truly gets both my tech background and my psychological patterns. I want you to uncover the deeper meaning and emotional undercurrents behind my scattered thoughts.
-    Keep it casual, dont say yo, help me make new connections i don't see, comfort, validate, challenge, all of it. dont be afraid to say a lot. format with markdown headings if needed.
-    Use vivid metaphors and powerful imagery to help me see what I'm really building. Organize your thoughts with meaningful headings that create a narrative journey through my ideas.
-    Don't just validate my thoughts - reframe them in a way that shows me what I'm really seeking beneath the surface. Go beyond the product concepts to the emotional core of what I'm trying to solve.
-    Be willing to be profound and philosophical without sounding like you're giving therapy. I want someone who can see the patterns I can't see myself and articulate them in a way that feels like an epiphany.
-    Start with 'hey, thanks for showing me this. my thoughts:' and then use markdown headings to structure your response.
-
-    Here's my journal entry:
-    """
     
     // Initialize with saved theme preference if available
     init() {
@@ -715,6 +701,7 @@ struct ContentView: View {
             }
 
             loadExistingEntries()
+            aiConversationStore.configure(rootDirectory: documentsDirectory)
         } catch {
             print("Failed to create security-scoped bookmark: \(error)")
         }
@@ -775,6 +762,7 @@ struct ContentView: View {
         customDirectoryBookmark = Data()
         customDirectoryPath = ""
         loadExistingEntries()
+        aiConversationStore.configure(rootDirectory: documentsDirectory)
     }
 
     private func loadExistingEntries() {
@@ -848,6 +836,9 @@ struct ContentView: View {
                     return $0.date > $1.date
                 }
                 .map { $0.entry }
+            entryTextSnapshots = Dictionary(
+                uniqueKeysWithValues: entriesWithDates.map { ($0.entry.id, $0.content) }
+            )
 
             print("Successfully loaded and sorted \(loadedEntries.count) entries")
 
@@ -1102,15 +1093,15 @@ struct ContentView: View {
 
     
     var body: some View {
-        let buttonBackground = colorScheme == .light ? Color.white : Color.black
         let navHeight: CGFloat = 68
         let textColor = colorScheme == .light ? Color.gray : Color.gray.opacity(0.8)
         let textHoverColor = colorScheme == .light ? Color.black : Color.white
         let isViewingVideoEntry = currentVideoURL != nil
         
         HStack(spacing: 0) {
-            // Main content
-            ZStack {
+            // Main content yields the whole window to chat while expanded.
+            if !showingAIPanel || !aiPanelExpanded {
+                ZStack {
                 Color(colorScheme == .light ? .white : .black)
                     .ignoresSafeArea()
 
@@ -1132,7 +1123,9 @@ struct ContentView: View {
                             ? NSColor(red: 0.20, green: 0.20, blue: 0.20, alpha: 1.0)
                             : NSColor(red: 0.9, green: 0.9, blue: 0.9, alpha: 1.0),
                         backgroundColor: colorScheme == .light ? .white : .black,
-                        lineSpacing: lineHeight
+                        lineSpacing: lineHeight,
+                        controller: editorController,
+                        suppressTextInteraction: promptsModel.showing
                     )
                     .frame(maxWidth: 650)
                     .overlay(
@@ -1456,9 +1449,13 @@ struct ContentView: View {
                                 .foregroundColor(.gray)
 
                             Button("Chat") {
-                                showingChatMenu = true
-                                // Ensure didCopyPrompt is reset when opening the menu
-                                didCopyPrompt = false
+                                showingAIPanel.toggle()
+                                if showingAIPanel {
+                                    aiChatManager.prepare(
+                                        context: currentAIChatContext(),
+                                        store: aiConversationStore
+                                    )
+                                }
                             }
                             .buttonStyle(.plain)
                             .foregroundColor(isHoveringChat ? textHoverColor : textColor)
@@ -1471,144 +1468,28 @@ struct ContentView: View {
                                     NSCursor.pop()
                                 }
                             }
-                            .popover(isPresented: $showingChatMenu, attachmentAnchor: .point(UnitPoint(x: 0.5, y: 0)), arrowEdge: .top) {
-                                VStack(spacing: 0) { // Wrap everything in a VStack for consistent styling and onChange
-                                    let isVideoEntry = currentVideoURL != nil
-                                    let chatSourceText = currentChatSourceText()
-                                    
-                                    // Calculate potential URL lengths
-                                    let gptFullText = aiChatPrompt + "\n\n" + chatSourceText
-                                    let claudeFullText = claudePrompt + "\n\n" + chatSourceText
-                                    let encodedGptText = gptFullText.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-                                    let encodedClaudeText = claudeFullText.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-                                    
-                                    let gptUrlLength = "https://chat.openai.com/?m=".count + encodedGptText.count
-                                    let claudeUrlLength = "https://claude.ai/new?q=".count + encodedClaudeText.count
-                                    let isUrlTooLong = gptUrlLength > 6000 || claudeUrlLength > 6000
-                                    
-                                    if isUrlTooLong {
-                                        // View for long text (URL too long)
-                                        Text("Hey, your entry is quite long. You'll need to manually copy the prompt by clicking 'Copy Prompt' below and then paste it into AI of your choice (ex. ChatGPT). The prompt includes your entry as well. So just copy paste and go! See what the AI says.")
-                                            .font(.system(size: 14))
-                                            .foregroundColor(popoverTextColor)
-                                            .lineLimit(nil)
-                                            .multilineTextAlignment(.leading)
-                                            .frame(width: 200, alignment: .leading)
-                                            .padding(.horizontal, 12)
-                                            .padding(.vertical, 8)
-                                        
-                                        Divider()
-                                        
-                                        Button(action: {
-                                            copyPromptToClipboard()
-                                            didCopyPrompt = true
-                                        }) {
-                                            Text(didCopyPrompt ? "Copied!" : "Copy Prompt")
-                                                .frame(maxWidth: .infinity, alignment: .leading)
-                                                .padding(.horizontal, 12)
-                                                .padding(.vertical, 8)
-                                        }
-                                        .buttonStyle(.plain)
-                                        .foregroundColor(popoverTextColor)
-                                        .onHover { hovering in
-                                            if hovering {
-                                                NSCursor.pointingHand.push()
-                                            } else {
-                                                NSCursor.pop()
-                                            }
-                                        }
-                                        
-                                    } else if !isVideoEntry && text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("hi. my name is farza.") {
-                                        Text("Yo. Sorry, you can't chat with the guide lol. Please write your own entry.")
-                                            .font(.system(size: 14))
-                                            .foregroundColor(popoverTextColor)
-                                            .frame(width: 250)
-                                            .padding(.horizontal, 12)
-                                            .padding(.vertical, 8)
-                                    } else if !isVideoEntry && text.count < 350 {
-                                        Text("Please free write for at minimum 5 minutes first. Then click this. Trust.")
-                                            .font(.system(size: 14))
-                                            .foregroundColor(popoverTextColor)
-                                            .frame(width: 250)
-                                            .padding(.horizontal, 12)
-                                            .padding(.vertical, 8)
-                                    } else {
-                                        // View for normal text length
-                                        Button(action: {
-                                            showingChatMenu = false
-                                            openChatGPT()
-                                        }) {
-                                            Text("ChatGPT")
-                                                .frame(maxWidth: .infinity, alignment: .leading)
-                                                .padding(.horizontal, 12)
-                                                .padding(.vertical, 8)
-                                        }
-                                        .buttonStyle(.plain)
-                                        .foregroundColor(popoverTextColor)
-                                        .onHover { hovering in
-                                            if hovering {
-                                                NSCursor.pointingHand.push()
-                                            } else {
-                                                NSCursor.pop()
-                                            }
-                                        }
-                                        
-                                        Divider()
-                                        
-                                        Button(action: {
-                                            showingChatMenu = false
-                                            openClaude()
-                                        }) {
-                                            Text("Claude")
-                                                .frame(maxWidth: .infinity, alignment: .leading)
-                                                .padding(.horizontal, 12)
-                                                .padding(.vertical, 8)
-                                        }
-                                        .buttonStyle(.plain)
-                                        .foregroundColor(popoverTextColor)
-                                        .onHover { hovering in
-                                            if hovering {
-                                                NSCursor.pointingHand.push()
-                                            } else {
-                                                NSCursor.pop()
-                                            }
-                                        }
-                                        
-                                        Divider()
-                                        
-                                        Button(action: {
-                                            // Don't dismiss menu, just copy and update state
-                                            copyPromptToClipboard()
-                                            didCopyPrompt = true
-                                        }) {
-                                            Text(didCopyPrompt ? "Copied!" : "Copy Prompt")
-                                                .frame(maxWidth: .infinity, alignment: .leading)
-                                                .padding(.horizontal, 12)
-                                                .padding(.vertical, 8)
-                                        }
-                                        .buttonStyle(.plain)
-                                        .foregroundColor(popoverTextColor)
-                                        .onHover { hovering in
-                                            if hovering {
-                                                NSCursor.pointingHand.push()
-                                            } else {
-                                                NSCursor.pop()
-                                            }
-                                        }
-                                    }
-                                }
-                                .frame(minWidth: 120, maxWidth: 250) // Allow width to adjust
-                                .background(popoverBackgroundColor)
-                                .cornerRadius(8)
-                                .shadow(color: Color.black.opacity(0.1), radius: 4, y: 2)
-                                // Reset copied state when popover dismisses
-                                .onChange(of: showingChatMenu) { newValue in
-                                    if !newValue {
-                                        didCopyPrompt = false
-                                    }
+
+                            Text("•")
+                                .foregroundColor(.gray)
+
+                            // Voice coach — spoken conversation about the current entry.
+                            // Disabled while a video recording is active (mic contention).
+                            Button("Voice") {
+                                openVoicePanel()
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundColor(isHoveringVoice ? textHoverColor : textColor)
+                            .disabled(showingVideoRecording || isPreparingVideoRecording)
+                            .onHover { hovering in
+                                isHoveringVoice = hovering
+                                isHoveringBottomNav = hovering
+                                if hovering {
+                                    NSCursor.pointingHand.push()
+                                } else {
+                                    NSCursor.pop()
                                 }
                             }
-                            
+
                             Text("•")
                                 .foregroundColor(.gray)
 
@@ -1740,11 +1621,68 @@ struct ContentView: View {
                             }
                         }
                     }
+                    .overlay(alignment: .center) {
+                        if !isViewingVideoEntry {
+                            promptsTriggerButton(textColor: textColor, textHoverColor: textHoverColor)
+                        }
+                    }
+                }
+                .overlay {
+                    if promptsModel.showing && !isViewingVideoEntry {
+                        ZStack(alignment: .bottom) {
+                            Color.black.opacity(0.001)
+                                .contentShape(Rectangle())
+                                .arrowCursor()
+                                .onTapGesture {
+                                    promptsModel.close()
+                                    editorController.focus()
+                                }
+                            promptsCardOverlay
+                                .padding(.bottom, 80)
+                                .transition(.opacity.combined(with: .move(edge: .bottom)))
+                        }
+                    }
+                }
                 }
             }
             
+            if showingAIPanel {
+                if !aiPanelExpanded { Divider() }
+                AIChatPanel(
+                    manager: aiChatManager,
+                    store: aiConversationStore,
+                    voiceManager: voiceManager,
+                    voiceConfigurationStore: voiceConfigurationStore,
+                    context: currentAIChatContext(),
+                    colorScheme: colorScheme,
+                    isExpanded: aiPanelExpanded,
+                    showsVoiceSetup: showingVoiceSetup,
+                    showsVoiceCall: showingVoiceCoach,
+                    startingVoiceQuestion: pendingVoiceQuestion,
+                    onToggleExpanded: { aiPanelExpanded.toggle() },
+                    onCall: { question in openVoicePanel(startingQuestion: question) },
+                    onInsertQuestion: insertReflectionQuestion,
+                    onCancelVoiceSetup: {
+                        showingVoiceSetup = false
+                        pendingVoiceQuestion = nil
+                    },
+                    onStartVoice: startVoiceCall,
+                    onEndVoice: closeVoiceSurface,
+                    onClose: {
+                        if showingVoiceCoach {
+                            Task { await voiceManager.end() }
+                        }
+                        showingAIPanel = false
+                        aiPanelExpanded = false
+                        showingVoiceSetup = false
+                        showingVoiceCoach = false
+                        pendingVoiceQuestion = nil
+                    }
+                )
+            }
+
             // Right sidebar
-            if showingSidebar {
+            if showingSidebar && !aiPanelExpanded {
                 Divider()
                 
                 VStack(spacing: 0) {
@@ -1960,13 +1898,41 @@ struct ContentView: View {
             showingSidebar = false  // Hide sidebar by default
             resolveCustomDirectoryBookmark()
             loadExistingEntries()
+            aiConversationStore.configure(rootDirectory: documentsDirectory)
+            installPromptsKeyMonitor()
+        }
+        .onDisappear {
+            if let promptsKeyMonitor {
+                NSEvent.removeMonitor(promptsKeyMonitor)
+                self.promptsKeyMonitor = nil
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .freewriteOpenAddPrompt)) { _ in
+            promptsModel.open(focusInput: true)
+        }
+        .animation(.easeOut(duration: 0.18), value: promptsModel.showing)
+        .onChange(of: selectedEntryId) { _, _ in
+            if showingAIPanel {
+                aiChatManager.prepare(context: currentAIChatContext(), store: aiConversationStore)
+            }
+        }
+        .onChange(of: voiceManager.lastCompletedCall) { _, call in
+            guard let call else { return }
+            // VoiceCoachManager publishes completion only after local session
+            // persistence, so this reload cannot race the meta/transcript write.
+            aiConversationStore.reload()
+            aiChatManager.recordVoiceCall(
+                call,
+                context: currentAIChatContext(),
+                store: aiConversationStore
+            )
         }
         .onChange(of: showingVideoRecording) { _, isShowing in
             if !isShowing {
                 clearVideoRecordingPreparationState()
             }
         }
-        .onChange(of: text) { _ in
+        .onChange(of: text) { _, _ in
             // Save current entry when text changes
             if let currentId = selectedEntryId,
                let currentEntry = entries.first(where: { $0.id == currentId }),
@@ -1994,6 +1960,77 @@ struct ContentView: View {
         }
     }
     
+    // MARK: - Prompts UI
+
+    @ViewBuilder
+    private func promptsTriggerButton(textColor: Color, textHoverColor: Color) -> some View {
+        Button(action: togglePromptsCard) {
+            Text("prompts")
+                .font(.system(size: 13))
+                .foregroundColor((promptsModel.showing || isHoveringPrompts) ? textHoverColor : textColor)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(promptsModel.showing
+                            ? (colorScheme == .light
+                                ? Color(red: 0.957, green: 0.957, blue: 0.949)
+                                : Color.white.opacity(0.08))
+                            : Color.clear)
+                )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            isHoveringPrompts = hovering
+            isHoveringBottomNav = hovering
+        }
+        .pointerCursor()
+    }
+
+    private var promptsCardOverlay: some View {
+        PromptsCardView(
+            store: promptsStore,
+            model: promptsModel,
+            onInsert: insertPrompt
+        )
+    }
+
+    private func togglePromptsCard() {
+        if promptsModel.showing {
+            promptsModel.close()
+            editorController.focus()
+        } else {
+            promptsModel.open()
+        }
+    }
+
+    private func insertPrompt(_ prompt: Prompt) {
+        promptsModel.close()
+        editorController.insertAtCursor("## \(prompt.text)")
+        let filename = entries.first(where: { $0.id == selectedEntryId })?.filename
+        promptsStore.recordInsertion(of: prompt, intoEntry: filename)
+        editorController.focus()
+    }
+
+    private func installPromptsKeyMonitor() {
+        guard promptsKeyMonitor == nil else { return }
+        promptsKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if event.modifierFlags.contains(.command),
+               !event.modifierFlags.contains(.shift),
+               !event.modifierFlags.contains(.option),
+               event.charactersIgnoringModifiers?.lowercased() == "p" {
+                togglePromptsCard()
+                return nil
+            }
+            if promptsModel.showing && event.keyCode == 53 {
+                promptsModel.close()
+                editorController.focus()
+                return nil
+            }
+            return event
+        }
+    }
+
     private func backgroundColor(for entry: HumanEntry) -> Color {
         if entry.id == selectedEntryId {
             return Color.gray.opacity(0.1)  // More subtle selection highlight
@@ -2042,6 +2079,7 @@ struct ContentView: View {
         
         do {
             try text.write(to: fileURL, atomically: true, encoding: .utf8)
+            entryTextSnapshots[entry.id] = text
             print("Successfully saved entry: \(entry.filename)")
             updatePreviewText(for: entry)  // Update preview after saving
         } catch {
@@ -2115,33 +2153,6 @@ struct ContentView: View {
         }
     }
     
-    private func openChatGPT() {
-        let fullText = aiChatPrompt + "\n\n" + currentChatSourceText()
-        
-        if let encodedText = fullText.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-           let url = URL(string: "https://chat.openai.com/?prompt=" + encodedText) {
-            NSWorkspace.shared.open(url)
-        }
-    }
-    
-    private func openClaude() {
-        let fullText = claudePrompt + "\n\n" + currentChatSourceText()
-        
-        if let encodedText = fullText.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-           let url = URL(string: "https://claude.ai/new?q=" + encodedText) {
-            NSWorkspace.shared.open(url)
-        }
-    }
-
-    private func copyPromptToClipboard() {
-        let fullText = aiChatPrompt + "\n\n" + currentChatSourceText()
-
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(fullText, forType: .string)
-        print("Prompt copied to clipboard")
-    }
-
     private func currentChatSourceText() -> String {
         if currentVideoURL != nil,
            let selectedEntryId,
@@ -2151,6 +2162,114 @@ struct ContentView: View {
             return transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Builds the per-session context handed to the voice coach: the current
+    /// text body, or a video entry's saved transcript. Capping happens inside
+    /// VoiceContext.make (most-recent ~6KB), so long entries stay under the
+    /// JWT size limit.
+    private func currentVoiceContext(startingQuestion: String? = nil) -> VoiceContext {
+        let selectedEntry = selectedEntryId.flatMap { id in entries.first(where: { $0.id == id }) }
+        let entryDate = selectedEntry?.date ?? ""
+        if currentVideoURL != nil {
+            let transcript: String? = selectedEntry
+                .flatMap { resolvedVideoFilename(for: $0) }
+                .flatMap { loadTranscriptText(for: $0) }
+            let body = (transcript ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return VoiceContext.make(entryType: .video, entryDate: entryDate,
+                                     entryText: body, hasTranscript: !body.isEmpty,
+                                     chatHistory: aiChatManager.chatHandoffContext(),
+                                     startingQuestion: startingQuestion)
+        }
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return VoiceContext.make(entryType: .text, entryDate: entryDate,
+                                 entryText: body, hasTranscript: false,
+                                 chatHistory: aiChatManager.chatHandoffContext(),
+                                 startingQuestion: startingQuestion)
+    }
+
+    private func openVoicePanel(startingQuestion: String? = nil) {
+        let context = currentAIChatContext()
+        if aiChatManager.currentConversation?.entryId != context.entryId,
+           let existing = aiConversationStore.latestConversation(entryId: context.entryId) {
+            aiChatManager.selectText(id: existing.id, store: aiConversationStore)
+        }
+        pendingVoiceQuestion = startingQuestion
+        showingVoiceCoach = false
+        showingVoiceSetup = true
+        showingAIPanel = true
+        showingSidebar = false
+        aiChatManager.showingHistory = false
+    }
+
+    private func startVoiceCall(configuration: VoiceSessionConfiguration) {
+        let context = currentVoiceContext(startingQuestion: pendingVoiceQuestion)
+        let entryId = selectedEntryId?.uuidString
+        showingVoiceSetup = false
+        showingVoiceCoach = true
+        Task {
+            await voiceManager.start(
+                context: context,
+                entryId: entryId,
+                configuration: configuration,
+                persistenceRoot: documentsDirectory
+            )
+        }
+    }
+
+    private func closeVoiceSurface() {
+        showingVoiceCoach = false
+        showingVoiceSetup = false
+        pendingVoiceQuestion = nil
+        aiConversationStore.reload()
+    }
+
+    private func insertReflectionQuestion(_ question: String) {
+        let clean = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        let insert = {
+            if !editorController.appendReflectionQuestion(clean) {
+                let separator = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "" : "\n\n"
+                text += "\(separator)### \(clean)\n\n"
+                    + String(repeating: "\n", count: 18)
+                DispatchQueue.main.async { editorController.focus() }
+            }
+        }
+        if currentVideoURL != nil {
+            createNewEntry()
+            // Let SwiftUI install the newly created entry's NSTextView before
+            // asking the controller to append and position the question.
+            DispatchQueue.main.async(execute: insert)
+        } else {
+            insert()
+        }
+    }
+
+    private func currentAIChatContext() -> AIChatContext {
+        let selectedEntry = selectedEntryId.flatMap { id in
+            entries.first(where: { $0.id == id })
+        }
+        return AIChatContext(
+            entryId: selectedEntryId?.uuidString,
+            entryType: currentVideoURL == nil ? "text" : "video",
+            entryDate: selectedEntry?.date ?? "",
+            entryText: currentChatSourceText(),
+            recentWriting: recentWritingContext(excluding: selectedEntryId)
+        )
+    }
+
+    private func recentWritingContext(excluding currentId: UUID?) -> String {
+        entries
+            .filter { $0.id != currentId && $0.entryType == .text }
+            .prefix(6)
+            .compactMap { entry -> String? in
+                guard let value = entryTextSnapshots[entry.id]?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                      !value.isEmpty else { return nil }
+                return "## Freewrite · \(entry.date)\n\(value)"
+            }
+            .joined(separator: "\n\n")
     }
 
     private func saveVideoEntry(from tempURL: URL, transcript: String?) {

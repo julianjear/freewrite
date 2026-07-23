@@ -1,0 +1,5 @@
+[project]
+  subdomain = "REPLACE_WITH_YOUR_LIVEKIT_SUBDOMAIN"
+
+[agent]
+  id = "freewrite-coach"

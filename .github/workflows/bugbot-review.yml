@@ -1,0 +1,41 @@
+name: Trigger Bugbot review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions: {}
+
+jobs:
+  trigger:
+    name: Request review
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      PR_COMMENT_TOKEN: ${{ secrets.PR_COMMENT_TOKEN }}
+    steps:
+      - name: Explain native-review fallback
+        if: env.PR_COMMENT_TOKEN == ''
+        run: |
+          echo "::notice::PR_COMMENT_TOKEN is not configured. Cursor's native Every Push review remains active; add a fine-grained token scoped to this repository to enable comment-triggered reviews."
+
+      - name: Comment Bugbot command
+        if: env.PR_COMMENT_TOKEN != ''
+        uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9
+        with:
+          github-token: ${{ env.PR_COMMENT_TOKEN }}
+          script: |
+            const pullRequest = context.payload.pull_request;
+            if (!pullRequest) {
+              core.setFailed("This workflow requires a pull_request event.");
+              return;
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pullRequest.number,
+              body: "bugbot run",
+            });

@@ -1,0 +1,39 @@
+name = "freewrite-voice-token"
+main = "src/index.ts"
+compatibility_date = "2026-07-18"
+compatibility_flags = ["nodejs_compat"]
+
+# Deploy to the infinite@julian.ai Cloudflare account.
+# Authenticate either by activating the named `infinite` Wrangler profile or
+# by setting CLOUDFLARE_API_TOKEN for non-interactive CI. Always confirm
+# `wrangler whoami` resolves this account before changing secrets or deploying.
+account_id = "0b9cb211bb5f049854525d6fdc6182f4"
+
+# Secrets (set with `wrangler secret put <NAME>` — never commit):
+#   LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, OPENAI_API_KEY,
+#   ANTHROPIC_API_KEY (optional; enables Claude text-chat models)
+# Supabase auth needs NO secret: tokens are ES256, verified against the project's
+# public JWKS at $SUPABASE_URL/auth/v1/.well-known/jwks.json.
+[vars]
+SUPABASE_URL = "https://glzxxdwlsttayuoajycq.supabase.co"
+COACH_AGENT_NAME = "freewrite-coach"
+ALLOWED_ORIGIN = ""
+TOKEN_TTL_SECONDS = "1200"
+# This must mirror credentials on the active LiveKit agent. It contains no
+# secrets; it prevents dispatching calls that are guaranteed to crash.
+ENABLED_VOICE_PROVIDERS = "google,openai,anthropic"
+ENABLED_STRATEGIST_PROVIDERS = "google,openai,anthropic"
+
+[[ratelimits]]
+name = "VOICE_TOKEN_RATE_LIMITER"
+namespace_id = "1001"
+simple = { limit = 10, period = 60 }
+
+[[ratelimits]]
+name = "CHAT_RATE_LIMITER"
+namespace_id = "1002"
+simple = { limit = 30, period = 60 }
+
+[observability]
+enabled = true
+head_sampling_rate = 1

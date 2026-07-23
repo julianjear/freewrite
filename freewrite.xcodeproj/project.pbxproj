@@ -8,6 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		2800F7412DA1CEA0008FE5F9 /* .gitignore in Resources */ = {isa = PBXBuildFile; fileRef = 2800F7402DA1CE9A008FE5F9 /* .gitignore */; };
+		A8AED502F79986E28C0CC81E /* LiveKit in Frameworks */ = {isa = PBXBuildFile; productRef = 945FE96E6CE1F3DE63039522 /* LiveKit */; };
+		F7B7ABCD1839F101AF86B3AE /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 22F4F42037B21D6BA00A29EB /* Supabase */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -34,9 +36,22 @@
 		2857D48B2D5F8A8100EE1012 /* freewriteUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = freewriteUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		5A11C8E62F30D8A800C0D3E4 /* Exceptions for "freewrite" folder in "freewrite" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 2857D46F2D5F8A8000EE1012 /* freewrite */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		2857D4722D5F8A8000EE1012 /* freewrite */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				5A11C8E62F30D8A800C0D3E4 /* Exceptions for "freewrite" folder in "freewrite" target */,
+			);
 			path = freewrite;
 			sourceTree = "<group>";
 		};
@@ -57,6 +72,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A8AED502F79986E28C0CC81E /* LiveKit in Frameworks */,
+				F7B7ABCD1839F101AF86B3AE /* Supabase in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -118,6 +135,8 @@
 			);
 			name = freewrite;
 			packageProductDependencies = (
+				945FE96E6CE1F3DE63039522 /* LiveKit */,
+				22F4F42037B21D6BA00A29EB /* Supabase */,
 			);
 			productName = freewrite;
 			productReference = 2857D4702D5F8A8000EE1012 /* freewrite.app */;
@@ -140,8 +159,6 @@
 				2857D4842D5F8A8100EE1012 /* freewriteTests */,
 			);
 			name = freewriteTests;
-			packageProductDependencies = (
-			);
 			productName = freewriteTests;
 			productReference = 2857D4812D5F8A8100EE1012 /* freewriteTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -163,8 +180,6 @@
 				2857D48E2D5F8A8100EE1012 /* freewriteUITests */,
 			);
 			name = freewriteUITests;
-			packageProductDependencies = (
-			);
 			productName = freewriteUITests;
 			productReference = 2857D48B2D5F8A8100EE1012 /* freewriteUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
@@ -201,6 +216,10 @@
 			);
 			mainGroup = 2857D4672D5F8A8000EE1012;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				239122032FCBE9030079AD05 /* XCRemoteSwiftPackageReference "supabase-swift" */,
+				239122042FCBE98B0079AD05 /* XCRemoteSwiftPackageReference "client-sdk-swift" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 2857D4712D5F8A8000EE1012 /* Products */;
 			projectDirPath = "";
@@ -406,6 +425,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = freewrite/Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Freewrite needs camera access to record video entries.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Freewrite needs microphone access to record audio with your video entries.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Freewrite uses speech recognition to show live captions while recording.";
@@ -452,6 +472,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = freewrite/Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Freewrite needs camera access to record video entries.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Freewrite needs microphone access to record audio with your video entries.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Freewrite uses speech recognition to show live captions while recording.";
@@ -612,6 +633,38 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		239122032FCBE9030079AD05 /* XCRemoteSwiftPackageReference "supabase-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/supabase/supabase-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.5.1;
+			};
+		};
+		239122042FCBE98B0079AD05 /* XCRemoteSwiftPackageReference "client-sdk-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/livekit/client-sdk-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.14.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		22F4F42037B21D6BA00A29EB /* Supabase */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 239122032FCBE9030079AD05 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Supabase;
+		};
+		945FE96E6CE1F3DE63039522 /* LiveKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 239122042FCBE98B0079AD05 /* XCRemoteSwiftPackageReference "client-sdk-swift" */;
+			productName = LiveKit;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 2857D4682D5F8A8000EE1012 /* Project object */;
 }
