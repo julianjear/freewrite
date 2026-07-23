@@ -1211,8 +1211,10 @@ measures actual agent audio. Use `--profile` to choose a model and
   `Session.isExpired`, and re-open Google sign-in when `currentToken()` cannot
   refresh; otherwise an expired disk session can produce misleading 401s.
   Concurrent sign-in callers must share `OAuthSignInCoordinator`; replacing a
-  pending callback continuation strands the earlier caller. A voice-token 401
-  gets one bounded refresh retry and reopens OAuth if refresh yields no token.
+  pending callback continuation strands the earlier caller. OAuth redirects
+  carry an attempt ID and stale callbacks are ignored before session exchange,
+  so an old browser tab cannot resolve a newer sign-in. A voice-token 401 gets
+  one bounded refresh retry and reopens OAuth if refresh yields no token.
 - Fatal coach configuration, non-recoverable agent-session telemetry errors,
   and unexpected coach disconnects in any active room phase must cancel level
   polling and disconnect the LiveKit room so a failed call cannot leave the

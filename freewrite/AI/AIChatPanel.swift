@@ -533,7 +533,7 @@ struct AIChatPanel: View {
                         manager.submit(context: context, store: store)
                     }
 
-                if manager.isStreaming {
+                if manager.isStreaming || manager.isGeneratingQuestions {
                     Button { manager.cancel(store: store) } label: {
                         Image(systemName: "stop.fill")
                             .font(.system(size: 11))
@@ -542,7 +542,12 @@ struct AIChatPanel: View {
                             .background(Color.primary, in: Circle())
                     }
                     .buttonStyle(.plain)
-                    .help("Stop response")
+                    .help("Stop generation")
+                    .accessibilityLabel(
+                        manager.isGeneratingQuestions
+                            ? "Stop reflection questions"
+                            : "Stop response"
+                    )
                     .pointerCursor()
                 } else {
                     Button {

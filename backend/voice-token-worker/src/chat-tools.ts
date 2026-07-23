@@ -116,7 +116,10 @@ async function wikimediaPages(searchQuery: string): Promise<unknown[]> {
 }
 
 async function imageSearch(query: string, subject: string): Promise<ToolExecutionResult> {
-  const primary = await wikimediaPages(`${subject} incategory:${subject}`);
+  // `incategory:` requires a real Commons category page name. The model gives
+  // us a free-text subject, so use it as a ranked term and constrain results
+  // to renderable bitmap files instead of guessing a category.
+  const primary = await wikimediaPages(`${subject} filetype:bitmap`);
   const images: ImageSearchResult[] = [];
   const seen = new Set<string>();
   const appendPages = (pages: unknown[]) => {

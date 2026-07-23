@@ -81,6 +81,8 @@ describe("chat tools", () => {
     const images = result.result.images as Array<{ title: string }>;
     expect(images.map((image) => image.title)).toEqual(["Exterior", "Waterfall"]);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(requestedURLs[0]).toContain("Fallingwater+filetype%3Abitmap");
+    expect(requestedURLs[0]).not.toContain("incategory");
     expect(requestedURLs[1]).toContain("Fallingwater+exterior+waterfall+filetype%3Abitmap");
   });
 });

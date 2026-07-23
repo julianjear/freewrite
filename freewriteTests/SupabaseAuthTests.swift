@@ -31,4 +31,15 @@ final class SupabaseAuthTests: XCTestCase {
 
         XCTAssertEqual(operationCount, 2)
     }
+
+    func testOAuthCallbackRoundTripsItsAttemptIdentity() {
+        let attemptID = UUID()
+        let callback = OAuthCallbackAttempt.redirectURL(for: attemptID)
+
+        XCTAssertEqual(OAuthCallbackAttempt.id(from: callback), attemptID)
+        XCTAssertNil(OAuthCallbackAttempt.id(from: URL(string: "freewrite://auth-callback")!))
+        XCTAssertNil(OAuthCallbackAttempt.id(
+            from: URL(string: "freewrite://auth-callback?freewrite_attempt=not-a-uuid")!
+        ))
+    }
 }

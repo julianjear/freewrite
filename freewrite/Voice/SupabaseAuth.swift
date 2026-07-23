@@ -63,6 +63,27 @@ final class OAuthSignInCoordinator {
     }
 }
 
+enum OAuthCallbackAttempt {
+    private static let queryName = "freewrite_attempt"
+
+    static func redirectURL(for attemptID: UUID) -> URL {
+        var components = URLComponents()
+        components.scheme = "freewrite"
+        components.host = "auth-callback"
+        components.queryItems = [
+            URLQueryItem(name: queryName, value: attemptID.uuidString),
+        ]
+        return components.url!
+    }
+
+    static func id(from url: URL) -> UUID? {
+        let value = URLComponents(
+            url: url, resolvingAgainstBaseURL: false
+        )?.queryItems?.first(where: { $0.name == queryName })?.value
+        return value.flatMap(UUID.init(uuidString:))
+    }
+}
+
 @MainActor
 final class SupabaseAuth: ObservableObject {
     static let shared = SupabaseAuth()
@@ -122,7 +143,7 @@ final class SupabaseAuth: ObservableObject {
     private func performGoogleSignIn(attemptId: UUID) async throws {
         let url = try client.auth.getOAuthSignInURL(
             provider: .google,
-            redirectTo: URL(string: "freewrite://auth-callback")!
+            redirectTo: OAuthCallbackAttempt.redirectURL(for: attemptId)
         )
 
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
@@ -145,17 +166,21 @@ final class SupabaseAuth: ObservableObject {
 
     /// Called from freewriteApp's .onOpenURL when the browser redirects back.
     func handleCallback(url: URL) async {
+        guard let callbackAttemptID = OAuthCallbackAttempt.id(from: url),
+              let pending = pendingSignIn,
+              pending.id == callbackAttemptID else {
+            return
+        }
+        // Claim this attempt before awaiting Supabase. Its timeout can no
+        // longer fire, and a late callback cannot consume a future attempt.
+        pendingSignIn = nil
         do {
             let session = try await client.auth.session(from: url)
             accessToken = session.accessToken
             isSignedIn = true
-            let pending = pendingSignIn
-            pendingSignIn = nil
-            pending?.continuation.resume()
+            pending.continuation.resume()
         } catch {
-            let pending = pendingSignIn
-            pendingSignIn = nil
-            pending?.continuation.resume(throwing: error)
+            pending.continuation.resume(throwing: error)
         }
     }
 
